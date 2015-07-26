@@ -25,6 +25,9 @@ typedef struct {
 	PurpleConnection *pc;
 	gchar *main_sms_device;
 	gchar *iden;
+	
+	guint phone_threads_poll;
+	guint everything_poll;
 } PushBulletAccount;
 
 typedef void (*PushBulletProxyCallbackFunc)(PushBulletAccount *pba, JsonNode *node, gpointer user_data);
@@ -57,6 +60,29 @@ pb_jsonobj_to_string(JsonObject *jsonobj)
 	return string;
 }
 
+static const gchar *
+pb_normalise_clean(const PurpleAccount *account, const char *who)
+{
+	static gchar normalised[100];
+	gint i, next = 6;
+	memset(normalised, 0, sizeof(normalised));
+	
+	if (who[0] == '+' || g_ascii_isdigit(who[0]))
+	{
+		for(i = strlen(who) - 1; i >= 0 && next >= 0 && i < sizeof(normalised); i--)
+		{
+			//strip out anything not a number
+			if (who[i] >= '0' && who[i] <= '9')
+				normalised[--next] = who[i];
+		}
+	} else {
+		memcpy(normalised, who, MIN(strlen(who), sizeof(normalised)));
+		purple_str_strip_char(normalised, ' ');
+	}
+	
+	return &normalised[next];
+}
+
 static void
 pb_response_callback(PurpleUtilFetchUrlData *url_data, gpointer user_data, const gchar *url_text, gsize len, const gchar *error_message)
 {
@@ -72,6 +98,7 @@ pb_response_callback(PurpleUtilFetchUrlData *url_data, gpointer user_data, const
 	} else {
 		JsonNode *root = json_parser_get_root(parser);
 		
+		//purple_debug_misc("pushbullet", "Got response: %s\n", url_text);
 		if (conn->callback) {
 			conn->callback(conn->pba, root, conn->user_data);
 		}
@@ -143,7 +170,7 @@ pb_fetch_url(PushBulletAccount *pba, const gchar *url, const gchar *postdata, Pu
         g_string_append(headers, "\r\n");
     }
 	
-	purple_debug_misc("pushbullet", "Request headers are %s\n", headers->str);
+	//purple_debug_misc("pushbullet", "Request headers are %s\n", headers->str);
     
     g_free(host);
     g_free(path);
@@ -235,7 +262,8 @@ pb_send_im(PurpleConnection *pc, const gchar *who, const gchar *message, PurpleM
 	if (g_str_has_prefix(message, "?OTR"))
 		return 0;
 	
-	if (who[0] == '+' || who[0] == '0') { //TODO unhax
+	if (who[0] == '+' || g_ascii_isdigit(who[0])) //TODO unhax
+	{
 		JsonObject *root = json_object_new();
 		JsonObject *push = json_object_new();
 		
@@ -260,6 +288,10 @@ pb_send_im(PurpleConnection *pc, const gchar *who, const gchar *message, PurpleM
 		json_object_unref(root);
 		
 		return 1;
+	}
+	
+	if (!strchr(who, '@')) {
+		return -1;
 	}
 	
 	//<IMG ID="5"> - embedded image i.e. MMS
@@ -307,6 +339,72 @@ pb_offline_msg(const PurpleBuddy *buddy)
 }
 
 static void
+pb_got_phone_thread(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
+{
+	PurpleAccount *account = pba->account;
+	PurpleConnection *pc = pba->pc;
+	JsonObject *rootobj = json_node_get_object(node);
+	JsonArray *thread = json_object_get_array_member(rootobj, "thread");
+	gint i;
+	guint len;
+	gchar *from = user_data;
+	PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_IM, from, account);
+	gint purple_last_message_timestamp = purple_account_get_int(account, "last_message_timestamp", 0);
+	gint newest_phone_message_id = purple_account_get_int(account, "newest_phone_message_id", 0);
+	
+	for(i = json_array_get_length(thread); i > 0; i--)
+	{
+		JsonObject *message = json_array_get_object_element(thread, i - 1);
+		gint64 timestamp = json_object_get_int_member(message, "timestamp");
+		const gchar *direction = json_object_get_string_member(message, "direction");
+		const gchar *body = json_object_get_string_member(message, "body");
+		gint id = atoi(json_object_get_string_member(message, "id"));
+		
+		if (timestamp > purple_last_message_timestamp || id > newest_phone_message_id) {
+			gchar *body_html = purple_strdup_withhtml(body);
+			if (direction[0] != 'o') {
+				serv_got_im(pc, from, body_html, PURPLE_MESSAGE_RECV, timestamp);
+			} else {
+				//const gchar *guid = json_object_get_string_member(message, "guid"); //TODO check sent guids
+				if (conv == NULL)
+				{
+					conv = purple_conversation_new(PURPLE_CONV_TYPE_IM, account, from);
+				}
+				purple_conversation_write(conv, from, body_html, PURPLE_MESSAGE_SEND, timestamp);
+			}
+			g_free(body_html);
+			
+			purple_account_set_int(account, "last_message_timestamp", MAX(purple_account_get_int(account, "last_message_timestamp", 0), timestamp));
+			purple_account_set_int(account, "newest_phone_message_id", MAX(purple_account_get_int(account, "newest_phone_message_id", 0), id));
+		}
+	}
+	
+	g_free(from);
+}
+
+static void
+pb_get_phone_thread_by_id(PushBulletAccount *pba, const gchar *device, const gchar *id, const gchar *from)
+{
+	gchar *thread_url;
+	gchar *from_copy;
+	
+	if (id == NULL || id[0] == '\0')
+		return;
+	
+	if (device == NULL) {
+		device = pba->main_sms_device;
+	}
+	from_copy = g_strdup(from);
+
+	thread_url = g_strdup_printf("https://api.pushbullet.com/v2/permanents/%s_thread_%s?",
+									purple_url_encode(device), id);
+	
+	pb_fetch_url(pba, thread_url, NULL, pb_got_phone_thread, from_copy);
+	
+	g_free(thread_url);
+}
+
+static void
 pb_got_phone_threads(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 {
 	PurpleAccount *account = pba->account;
@@ -315,17 +413,32 @@ pb_got_phone_threads(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 	gint i;
 	guint len;
 	gchar *device = user_data;
+	gint last_message_timestamp = purple_account_get_int(account, "last_message_timestamp", 0);
+	gint newest_phone_message_id = purple_account_get_int(account, "newest_phone_message_id", 0);
 	
 	for(i = 0, len = json_array_get_length(threads); i < len; i++)
 	{
 		JsonObject *thread = json_array_get_object_element(threads, i);
 		const gchar *id = json_object_get_string_member(thread, "id");
 		JsonArray *recipients = json_object_get_array_member(thread, "recipients");
+		const gchar *from = NULL;
 		
+		if (json_array_get_length(recipients) > 0) {
+			JsonObject *first_recipient = json_array_get_object_element(recipients, 0);
+			from = json_object_get_string_member(first_recipient, "number");
+		}
+		if (from == NULL) {
+			continue;
+		}
 		if (json_object_has_member(thread, "latest"))
 		{
 			JsonObject *latest = json_object_get_object_member(thread, "latest");
 			gint64 timestamp = json_object_get_int_member(latest, "timestamp");
+			gint msgid = atoi(json_object_get_string_member(latest, "id"));
+			
+			if (timestamp > last_message_timestamp || msgid > newest_phone_message_id) {
+				pb_get_phone_thread_by_id(pba, device, id, from);
+			}
 		}
 		
 	}
@@ -350,6 +463,17 @@ pb_get_phone_threads(PushBulletAccount *pba, const gchar *device)
 	pb_fetch_url(pba, phonebook_url, NULL, pb_got_phone_threads, device_copy);
 	
 	g_free(phonebook_url);
+}
+
+static gboolean
+pb_poll_phone_threads(PushBulletAccount *pba)
+{
+	if (purple_account_is_connected(pba->account)) {
+		pb_get_phone_threads(pba, NULL);
+		return TRUE;
+	}
+	
+	return FALSE;
 }
 
 static void
@@ -483,6 +607,9 @@ pb_login(PurpleAccount *account)
 		if (purple_account_get_string(account, "main_sms_device", NULL) != NULL) {
 			pba->main_sms_device = g_strdup(purple_account_get_string(account, "main_sms_device", NULL));
 			pb_get_phonebook(pba, pba->main_sms_device);
+			
+			pb_poll_phone_threads(pba);
+			purple_timeout_add_seconds(10, (GSourceFunc) pb_poll_phone_threads, pba);
 		}
 		
 		pb_get_everything(pba);
@@ -501,8 +628,10 @@ pb_close(PurpleConnection *pc)
 	purple_account_set_string(account, "main_sms_device", pba->main_sms_device);
 	g_free(pba->main_sms_device); pba->main_sms_device = NULL;
 	
-	//g_free(pba->access_token); pba->access_token = NULL;
-	//g_free(pba);
+	purple_timeout_remove(pba->phone_threads_poll);
+	
+	g_free(pba->access_token); pba->access_token = NULL;
+	g_free(pba);
 }
 
 static const char *
@@ -612,7 +741,7 @@ PurplePluginProtocolInfo prpl_info = {
 	NULL,                /* rename_group */
 	NULL,                /* buddy_free */
 	NULL,                /* convo_closed */
-	NULL/*mt_normalise_clean*/,  /* normalize */
+	pb_normalise_clean,  /* normalize */
 	NULL,                /* set_buddy_icon */
 	NULL,                /* remove_group */
 	NULL,                /* get_cb_real_name */
