@@ -18,6 +18,8 @@
 #include <prpl.h>
 #include <version.h>
 
+#define PB_IS_SMS(a) (((a[0] == '+' || a[0] == '(') && g_ascii_isdigit(a[1])) || g_ascii_isdigit(a[0]))
+
 typedef struct {
 	gchar *access_token;
 	PurpleSslConnection *websocket;
@@ -64,23 +66,24 @@ static const gchar *
 pb_normalise_clean(const PurpleAccount *account, const char *who)
 {
 	static gchar normalised[100];
-	gint i, next = 6;
+	gint i, len, next = 0;
 	memset(normalised, 0, sizeof(normalised));
 	
-	if (who[0] == '+' || g_ascii_isdigit(who[0]))
+	len = strlen(who);
+	if (PB_IS_SMS(who))
 	{
-		for(i = strlen(who) - 1; i >= 0 && next >= 0 && i < sizeof(normalised); i--)
+		for(i = 0; i < len && i < sizeof(normalised); i++)
 		{
 			//strip out anything not a number
-			if (who[i] >= '0' && who[i] <= '9')
-				normalised[--next] = who[i];
+			if ((who[i] >= '0' && who[i] <= '9') || who[i] == '+')
+				normalised[next++] = who[i];
 		}
 	} else {
-		memcpy(normalised, who, MIN(strlen(who), sizeof(normalised)));
+		memcpy(normalised, who, MIN(len, sizeof(normalised)));
 		purple_str_strip_char(normalised, ' ');
 	}
 	
-	return &normalised[next];
+	return normalised;
 }
 
 static void
@@ -262,7 +265,7 @@ pb_send_im(PurpleConnection *pc, const gchar *who, const gchar *message, PurpleM
 	if (g_str_has_prefix(message, "?OTR"))
 		return 0;
 	
-	if (who[0] == '+' || g_ascii_isdigit(who[0])) //TODO unhax
+	if (PB_IS_SMS(who))
 	{
 		JsonObject *root = json_object_new();
 		JsonObject *push = json_object_new();
@@ -609,7 +612,7 @@ pb_login(PurpleAccount *account)
 			pb_get_phonebook(pba, pba->main_sms_device);
 			
 			pb_poll_phone_threads(pba);
-			purple_timeout_add_seconds(10, (GSourceFunc) pb_poll_phone_threads, pba);
+			pba->phone_threads_poll = purple_timeout_add_seconds(10, (GSourceFunc) pb_poll_phone_threads, pba);
 		}
 		
 		pb_get_everything(pba);
@@ -643,7 +646,10 @@ pb_list_icon(PurpleAccount *account, PurpleBuddy *buddy)
 static const gchar *
 pb_list_emblem(PurpleBuddy *buddy)
 {
-	return "mobile";
+	if (PB_IS_SMS(buddy->name))
+		return "mobile";
+	
+	return "";
 }
 
 static GList *
