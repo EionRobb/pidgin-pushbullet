@@ -11,7 +11,7 @@ DATA_ROOT_DIR_PURPLE=$(shell pkg-config --variable=datarootdir purple)
 PRPL_NAME=libpushbullet.so
 PRPL_LIBNAME=${PRPL_NAME}
 
-SKYPEWEB_SOURCES = \
+PUSHBULLET_SOURCES = \
 	libpushbullet.c 
 
 .PHONY:	all clean install
@@ -28,5 +28,5 @@ install:
 clean:
 	rm -f libpushbullet.so
 
-${PRPL_NAME}: ${SKYPEWEB_SOURCES}
-	${COMPILER} -Wall -I. -g -O2 -fPIC -pipe ${SKYPEWEB_SOURCES} -o $@ ${LIBPURPLE_CFLAGS} ${LIBPURPLE_LIBS} -shared
+${PRPL_NAME}: ${PUSHBULLET_SOURCES}
+	${COMPILER} -Wall -I. -g -O2 -fPIC -pipe ${PUSHBULLET_SOURCES} -o $@ ${LIBPURPLE_CFLAGS} ${LIBPURPLE_LIBS} -shared
