@@ -25,6 +25,10 @@ typedef struct {
 	PurpleSslConnection *websocket;
 	PurpleAccount *account;
 	PurpleConnection *pc;
+	
+	GHashTable *sent_messages_hash;
+	guint next_message_id;
+	
 	gchar *main_sms_device;
 	gchar *iden;
 	
@@ -84,6 +88,12 @@ pb_normalise_clean(const PurpleAccount *account, const char *who)
 	}
 	
 	return normalised;
+}
+
+gchar *
+pb_get_next_id(PushBulletAccount *pba)
+{
+	return g_strdup_printf("purple%x", pba->next_message_id++);
 }
 
 static void
@@ -261,6 +271,7 @@ pb_send_im(PurpleConnection *pc, const gchar *who, const gchar *message, PurpleM
 {
 	PushBulletAccount *pba = pc->proto_data;
 	gchar *stripped, *postdata;
+	gchar *guid;
 	
 	if (g_str_has_prefix(message, "?OTR"))
 		return 0;
@@ -270,7 +281,8 @@ pb_send_im(PurpleConnection *pc, const gchar *who, const gchar *message, PurpleM
 		JsonObject *root = json_object_new();
 		JsonObject *push = json_object_new();
 		
-		//json_object_set_string_member(push, "guid", ""); //TODO unique id for message
+		guid = pb_get_next_id(pba);
+		json_object_set_string_member(push, "guid", guid);
 		json_object_set_string_member(push, "type", "messaging_extension_reply");
 		json_object_set_string_member(push, "package_name", "com.pushbullet.android");
 		//json_object_set_string_member(push, "source_user_iden", pba->iden); //TODO supply this
@@ -290,6 +302,7 @@ pb_send_im(PurpleConnection *pc, const gchar *who, const gchar *message, PurpleM
 		
 		json_object_unref(root);
 		
+		g_hash_table_insert(pba->sent_messages_hash, guid, guid);
 		return 1;
 	}
 	
@@ -313,7 +326,9 @@ pb_send_im(PurpleConnection *pc, const gchar *who, const gchar *message, PurpleM
 	
 	{
 		JsonObject *root = json_object_new();
-		//json_object_set_string_member(root, "guid", ""); //TODO unique id for message
+		
+		guid = pb_get_next_id(pba);
+		json_object_set_string_member(root, "guid", guid);
 		json_object_set_string_member(root, "type", "note");
 		json_object_set_string_member(root, "title", "");
 		json_object_set_string_member(root, "url", "");
@@ -329,6 +344,7 @@ pb_send_im(PurpleConnection *pc, const gchar *who, const gchar *message, PurpleM
 		
 		json_object_unref(root);
 		
+		g_hash_table_insert(pba->sent_messages_hash, guid, guid);
 		return 1;
 	}
 	
@@ -368,12 +384,14 @@ pb_got_phone_thread(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 			if (direction[0] != 'o') {
 				serv_got_im(pc, from, body_html, PURPLE_MESSAGE_RECV, timestamp);
 			} else {
-				//const gchar *guid = json_object_get_string_member(message, "guid"); //TODO check sent guids
-				if (conv == NULL)
-				{
-					conv = purple_conversation_new(PURPLE_CONV_TYPE_IM, account, from);
+				const gchar *guid = json_object_get_string_member(message, "guid");
+				if (guid && *guid && !g_hash_table_remove(pba->sent_messages_hash, guid)) {
+					if (conv == NULL)
+					{
+						conv = purple_conversation_new(PURPLE_CONV_TYPE_IM, account, from);
+					}
+					purple_conversation_write(conv, from, body_html, PURPLE_MESSAGE_SEND, timestamp);
 				}
-				purple_conversation_write(conv, from, body_html, PURPLE_MESSAGE_SEND, timestamp);
 			}
 			g_free(body_html);
 			
@@ -595,6 +613,7 @@ pb_login(PurpleAccount *account)
 	pba = g_new0(PushBulletAccount, 1);
 	pba->account = account;
 	pba->pc = pc;
+	pba->sent_messages_hash = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
 	
 	password = purple_account_get_password(account);
 	if (password && *password) {
@@ -633,6 +652,7 @@ pb_close(PurpleConnection *pc)
 	
 	purple_timeout_remove(pba->phone_threads_poll);
 	
+	g_hash_table_destroy(pba->sent_messages_hash); pba->sent_messages_hash = NULL;
 	g_free(pba->access_token); pba->access_token = NULL;
 	g_free(pba);
 }
