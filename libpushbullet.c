@@ -567,6 +567,7 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 {
 	JsonObject *rootobj = json_node_get_object(node);
 	JsonArray *devices = json_object_get_array_member(rootobj, "devices");
+	JsonArray *pushes = json_object_get_array_member(rootobj, "pushes");
 	gint i;
 	guint len;
 	
@@ -578,7 +579,29 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 			purple_account_set_string(pba->account, "main_sms_device", pba->main_sms_device);
 			
 			pb_get_phonebook(pba, pba->main_sms_device);
+			
+			if (!pba->phone_threads_poll) {
+				pb_poll_phone_threads(pba);
+				pba->phone_threads_poll = purple_timeout_add_seconds(10, (GSourceFunc) pb_poll_phone_threads, pba);
+			}
+			
 			break; //TODO handle more than one
+		}
+	}
+	
+	for(i = 0, len = json_array_get_length(pushes); i < len; i++) {
+		JsonObject *push = json_array_get_object_element(pushes, i);
+		const gchar *type = json_object_get_string_member(push, "type");
+		
+		if (type && g_str_equal(type, "note")) {
+			const gchar *email = json_object_get_string_member(push, "sender_email");
+			const gchar *body = json_object_get_string_member(push, "body");
+			gdouble modified = json_object_get_double_member(push, "modified");
+			gchar *body_html = purple_strdup_withhtml(body);
+			
+			serv_got_im(pba->pc, email, body_html, PURPLE_MESSAGE_RECV, (int) modified);
+			
+			g_free(body_html);
 		}
 	}
 }
