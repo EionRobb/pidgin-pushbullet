@@ -23,6 +23,8 @@
 typedef struct {
 	gchar *access_token;
 	PurpleSslConnection *websocket;
+	gboolean websocket_header_received;
+	
 	PurpleAccount *account;
 	PurpleConnection *pc;
 	
@@ -196,26 +198,134 @@ pb_fetch_url(PushBulletAccount *pba, const gchar *url, const gchar *postdata, Pu
 	g_free(proxy_url);
 }
 
+
+static void pb_get_everything_since(PushBulletAccount *pba, gint timestamp);
+
 static void
-pba_socket_got_data(gpointer userdata, PurpleSslConnection *conn, PurpleInputCondition cond)
+pb_process_frame(PushBulletAccount *pba, const gchar *frame)
 {
+	JsonParser *parser = json_parser_new();
+	JsonNode *root;
 	
+	purple_debug_info("pushbullet", "got frame data: %s\n", frame);
+	
+	if (!json_parser_load_from_data(parser, frame, -1, NULL))
+	{
+		purple_debug_error("pushbullet", "Error parsing response: %s\n", frame);
+		return;
+	}
+	
+	root = json_parser_get_root(parser);
+	
+	if (root != NULL) {
+		JsonObject *message = json_node_get_object(root);
+		const gchar *type = json_object_get_string_member(message, "type");
+		if (g_str_equal(type, "tickle")) {
+			pb_get_everything_since(pba, purple_account_get_int(pba->account, "last_message_timestamp", 0));
+		} else if (g_str_equal(type, "push")) {
+			JsonObject *push = json_object_get_object_member(message, "push");
+		}
+	}
+	
+	g_object_unref(parser);
+}
+
+static
+/*
+int WEBSOCKET_get_content( const char *data, int data_length, unsigned char *dst )
+@data - entire data received with socket
+@data_length - size of @data
+@dst - pointer to char array, where the result will be stored
+@return - size of @dst */
+guint64 WEBSOCKET_get_content( const char *data, int data_length, unsigned char *dst, const unsigned int dst_len ) {
+	unsigned int i, j;
+	guint64 packet_length = 0;
+	unsigned int length_code = 0;
+	int index_first_mask = 0;
+
+	if( ( unsigned char )data[0] != 129 ) {
+		dst = NULL;
+		if( ( unsigned char )data[0] == 136 ) {
+			/* WebSocket client disconnected */
+			return -2;
+		}
+		/* Unknown error */
+		return -1;
+	}
+
+	length_code = ((unsigned char) data[1]) & 127;
+
+	if( length_code <= 125 ) {
+		index_first_mask = 2;
+		packet_length = length_code;
+	} else if( length_code == 126 ) {
+		index_first_mask = 4;
+		packet_length += (((unsigned char) data[2]) & 255) << 8;
+		packet_length += (((unsigned char) data[3]) & 255);
+	} else if( length_code == 127 ) {
+		index_first_mask = 10;
+		packet_length += (((unsigned char) data[2]) & 255) << 56;
+		packet_length += (((unsigned char) data[3]) & 255) << 48;
+		packet_length += (((unsigned char) data[4]) & 255) << 40;
+		packet_length += (((unsigned char) data[5]) & 255) << 32;
+		packet_length += (((unsigned char) data[6]) & 255) << 24;
+		packet_length += (((unsigned char) data[7]) & 255) << 16;
+		packet_length += (((unsigned char) data[8]) & 255) << 8;
+		packet_length += (((unsigned char) data[9]) & 255);
+	}
+
+	for( i = index_first_mask, j = 0; i < data_length && j < packet_length && j < dst_len; i++, j++ ) {
+		dst[ j ] = ( unsigned char )data[ i ];
+	}
+
+	return packet_length;
 }
 
 static void
-pba_socket_got_header_response(gpointer userdata, PurpleSslConnection *conn, PurpleInputCondition cond)
+pb_socket_got_data(gpointer userdata, PurpleSslConnection *conn, PurpleInputCondition cond)
 {
 	PushBulletAccount *pba = userdata;
-	purple_ssl_input_add(pba->websocket, pba_socket_got_data, pba);
+	gchar buf[4096];
+	gssize len;
+	gchar *frame;
+	guint frame_len;
+	guint i = 0;
 	
-	// HTTP/1.1 101 Switching Protocols
-	// Server: nginx
-	// Date: Sun, 19 Jul 2015 23:44:27 GMT
-	// Connection: upgrade
-	// Upgrade: websocket
-	// Sec-WebSocket-Accept: pUDN5Js0uDN5KhEWoPJGLyTqwME=
-	// Expires: 0
-	// Cache-Control: no-cache
+	len = purple_ssl_read(conn, buf, sizeof(buf) - 1);
+	buf[len] = '\0';
+	//purple_debug_info("pushbullet", "got websocket data: %s\n", buf);
+	
+	if (!pba->websocket_header_received) {
+		// HTTP/1.1 101 Switching Protocols
+		// Server: nginx
+		// Date: Sun, 19 Jul 2015 23:44:27 GMT
+		// Connection: upgrade
+		// Upgrade: websocket
+		// Sec-WebSocket-Accept: pUDN5Js0uDN5KhEWoPJGLyTqwME=
+		// Expires: 0
+		// Cache-Control: no-cache
+		
+		gint header_len;
+		gchar *header_end;
+		
+		header_end = g_strstr_len(buf, len, "\r\n\r\n");
+		if (header_end) {
+			header_len = header_end - buf + 4;
+			i += header_len;
+		}
+	}
+	
+	//TODO loop the read
+	if (len > 0) {
+		frame_len = WEBSOCKET_get_content(&buf[i], len - i, NULL, 0);
+		//purple_debug_info("pushbullet", "frame_len: %d\n", frame_len);
+		frame = g_new0(gchar, frame_len + 1);
+		WEBSOCKET_get_content(&buf[i], len - i, (unsigned char *)frame, frame_len);
+		
+		pb_process_frame(pba, frame);
+		
+		g_free(frame);
+	}
 }
 
 static void
@@ -225,7 +335,7 @@ pb_socket_connected(gpointer userdata, PurpleSslConnection *conn, PurpleInputCon
 	gchar *websocket_header;
 	const gchar *websocket_key = "15XF+ptKDhYVERXoGcdHTA=="; //TODO don't be lazy
 	
-	purple_ssl_input_add(pba->websocket, pba_socket_got_header_response, pba);
+	purple_ssl_input_add(pba->websocket, pb_socket_got_data, pba);
 	
 	websocket_header = g_strdup_printf("GET /subscribe/%s HTTP/1.1\r\n"
 							"Host: stream.pushbullet.com\r\n"
@@ -649,6 +759,8 @@ pb_login(PurpleAccount *account)
 	{
 		purple_connection_set_state(pc, PURPLE_CONNECTED);
 		
+		pb_start_socket(pba);
+		
 		if (purple_account_get_string(account, "main_sms_device", NULL) != NULL) {
 			pba->main_sms_device = g_strdup(purple_account_get_string(account, "main_sms_device", NULL));
 			pb_get_phonebook(pba, pba->main_sms_device);
@@ -674,6 +786,7 @@ pb_close(PurpleConnection *pc)
 	g_free(pba->main_sms_device); pba->main_sms_device = NULL;
 	
 	purple_timeout_remove(pba->phone_threads_poll);
+	purple_ssl_close(pba->websocket);
 	
 	g_hash_table_destroy(pba->sent_messages_hash); pba->sent_messages_hash = NULL;
 	g_free(pba->access_token); pba->access_token = NULL;
