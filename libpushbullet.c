@@ -262,7 +262,8 @@ pb_socket_got_data(gpointer userdata, PurpleSslConnection *conn, PurpleInputCond
 		pba->websocket_header_received = TRUE;
 	}
 	
-	if (purple_ssl_read(conn, &packet_code, 1)) {
+	packet_code = 0;
+	while(purple_ssl_read(conn, &packet_code, 1) == 1) {
 		if (packet_code != 129) {
 			if (packet_code == 136) {
 				purple_debug_error("pushbullet", "websocket closed\n");
@@ -275,6 +276,7 @@ pb_socket_got_data(gpointer userdata, PurpleSslConnection *conn, PurpleInputCond
 			return;
 		}
 		
+		length_code = 0;
 		purple_ssl_read(conn, &length_code, 1);
 		if (length_code <= 125) {
 			frame_len = length_code;
@@ -290,7 +292,11 @@ pb_socket_got_data(gpointer userdata, PurpleSslConnection *conn, PurpleInputCond
 		
 		frame = g_new0(gchar, frame_len + 1);
 		purple_ssl_read(conn, frame, frame_len);
+		
 		pb_process_frame(pba, frame);
+		
+		g_free(frame);
+		packet_code = 0;
 	}
 }
 
