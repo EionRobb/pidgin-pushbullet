@@ -230,72 +230,16 @@ pb_process_frame(PushBulletAccount *pba, const gchar *frame)
 	g_object_unref(parser);
 }
 
-static
-/*
-int WEBSOCKET_get_content( const char *data, int data_length, unsigned char *dst )
-@data - entire data received with socket
-@data_length - size of @data
-@dst - pointer to char array, where the result will be stored
-@return - size of @dst */
-guint64 WEBSOCKET_get_content( const char *data, int data_length, unsigned char *dst, const unsigned int dst_len ) {
-	unsigned int i, j;
-	guint64 packet_length = 0;
-	unsigned int length_code = 0;
-	int index_first_mask = 0;
-
-	if( ( unsigned char )data[0] != 129 ) {
-		dst = NULL;
-		if( ( unsigned char )data[0] == 136 ) {
-			/* WebSocket client disconnected */
-			return -2;
-		}
-		/* Unknown error */
-		return -1;
-	}
-
-	length_code = ((unsigned char) data[1]) & 127;
-
-	if( length_code <= 125 ) {
-		index_first_mask = 2;
-		packet_length = length_code;
-	} else if( length_code == 126 ) {
-		index_first_mask = 4;
-		packet_length += (((unsigned char) data[2]) & 255) << 8;
-		packet_length += (((unsigned char) data[3]) & 255);
-	} else if( length_code == 127 ) {
-		index_first_mask = 10;
-		packet_length += (((unsigned char) data[2]) & 255) << 56;
-		packet_length += (((unsigned char) data[3]) & 255) << 48;
-		packet_length += (((unsigned char) data[4]) & 255) << 40;
-		packet_length += (((unsigned char) data[5]) & 255) << 32;
-		packet_length += (((unsigned char) data[6]) & 255) << 24;
-		packet_length += (((unsigned char) data[7]) & 255) << 16;
-		packet_length += (((unsigned char) data[8]) & 255) << 8;
-		packet_length += (((unsigned char) data[9]) & 255);
-	}
-
-	for( i = index_first_mask, j = 0; i < data_length && j < packet_length && j < dst_len; i++, j++ ) {
-		dst[ j ] = ( unsigned char )data[ i ];
-	}
-
-	return packet_length;
-}
-
 static void
 pb_socket_got_data(gpointer userdata, PurpleSslConnection *conn, PurpleInputCondition cond)
 {
 	PushBulletAccount *pba = userdata;
-	gchar buf[4096];
-	gssize len;
 	gchar *frame;
-	guint frame_len;
-	guint i = 0;
+	guchar packet_code, length_code;
+	guint64 frame_len;
 	
-	len = purple_ssl_read(conn, buf, sizeof(buf) - 1);
-	buf[len] = '\0';
-	//purple_debug_info("pushbullet", "got websocket data: %s\n", buf);
 	
-	if (!pba->websocket_header_received) {
+	if (G_UNLIKELY(!pba->websocket_header_received)) {
 		// HTTP/1.1 101 Switching Protocols
 		// Server: nginx
 		// Date: Sun, 19 Jul 2015 23:44:27 GMT
@@ -304,27 +248,49 @@ pb_socket_got_data(gpointer userdata, PurpleSslConnection *conn, PurpleInputCond
 		// Sec-WebSocket-Accept: pUDN5Js0uDN5KhEWoPJGLyTqwME=
 		// Expires: 0
 		// Cache-Control: no-cache
+		gint nlbr_count = 0;
+		gchar nextchar;
 		
-		gint header_len;
-		gchar *header_end;
-		
-		header_end = g_strstr_len(buf, len, "\r\n\r\n");
-		if (header_end) {
-			header_len = header_end - buf + 4;
-			i += header_len;
+		while(nlbr_count < 4 && purple_ssl_read(conn, &nextchar, 1)) {
+			if (nextchar == '\r' || nextchar == '\n') {
+				nlbr_count++;
+			} else {
+				nlbr_count = 0;
+			}
 		}
+		
+		pba->websocket_header_received = TRUE;
 	}
 	
-	//TODO loop the read
-	if (len > 0) {
-		frame_len = WEBSOCKET_get_content(&buf[i], len - i, NULL, 0);
+	if (purple_ssl_read(conn, &packet_code, 1)) {
+		if (packet_code != 129) {
+			if (packet_code == 136) {
+				purple_debug_error("pushbullet", "websocket closed\n");
+				purple_ssl_close(conn);
+				pba->websocket = NULL;
+				pba->websocket_header_received = FALSE;
+				return;
+			}
+			purple_debug_error("pushbullet", "unknown websocket error %d\n", packet_code);
+			return;
+		}
+		
+		purple_ssl_read(conn, &length_code, 1);
+		if (length_code <= 125) {
+			frame_len = length_code;
+		} else if (length_code == 126) {
+			guchar len_buf[2];
+			purple_ssl_read(conn, len_buf, 2);
+			frame_len = (len_buf[1] << 8) + len_buf[0];
+		} else if (length_code == 127) {
+			purple_ssl_read(conn, &frame_len, 8);
+			frame_len = GUINT64_FROM_BE(frame_len);
+		}
 		//purple_debug_info("pushbullet", "frame_len: %d\n", frame_len);
+		
 		frame = g_new0(gchar, frame_len + 1);
-		WEBSOCKET_get_content(&buf[i], len - i, (unsigned char *)frame, frame_len);
-		
+		purple_ssl_read(conn, frame, frame_len);
 		pb_process_frame(pba, frame);
-		
-		g_free(frame);
 	}
 }
 
