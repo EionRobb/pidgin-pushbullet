@@ -18,6 +18,10 @@
 #include <prpl.h>
 #include <version.h>
 
+#ifndef _
+#	define _(a) (a)
+#endif
+
 #define PB_IS_SMS(a) (((a[0] == '+' || a[0] == '(') && g_ascii_isdigit(a[1])) || g_ascii_isdigit(a[0]))
 
 typedef struct {
@@ -467,7 +471,7 @@ pb_got_phone_thread(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 				serv_got_im(pc, from, body_html, PURPLE_MESSAGE_RECV, timestamp);
 			} else {
 				const gchar *guid = json_object_get_string_member(message, "guid");
-				if (guid && *guid && !g_hash_table_remove(pba->sent_messages_hash, guid)) {
+				if (!guid || !g_hash_table_remove(pba->sent_messages_hash, guid)) {
 					if (conv == NULL)
 					{
 						conv = purple_conversation_new(PURPLE_CONV_TYPE_IM, account, from);
@@ -650,6 +654,7 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 	JsonObject *rootobj = json_node_get_object(node);
 	JsonArray *devices = json_object_get_array_member(rootobj, "devices");
 	JsonArray *pushes = json_object_get_array_member(rootobj, "pushes");
+	JsonArray *contacts = json_object_get_array_member(rootobj, "contacts");
 	gint i;
 	guint len;
 	
@@ -671,19 +676,67 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 		}
 	}
 	
-	for(i = 0, len = json_array_get_length(pushes); i < len; i++) {
-		JsonObject *push = json_array_get_object_element(pushes, i);
-		const gchar *type = json_object_get_string_member(push, "type");
+	if (pushes != NULL) {
+		gint last_message_timestamp = purple_account_get_int(pba->account, "last_message_timestamp", 0);
+		for(i = json_array_get_length(pushes); i > 0; i--) {
+			JsonObject *push = json_array_get_object_element(pushes, i - 1);
+			const gchar *type = json_object_get_string_member(push, "type");
+			
+			if (type && g_str_equal(type, "note")) {
+				const gchar *from = json_object_get_string_member(push, "sender_email_normalized");
+				const gchar *body = json_object_get_string_member(push, "body");
+				gdouble modified = json_object_get_double_member(push, "modified");
+				time_t timestamp = (time_t) modified;
+				const gchar *direction = json_object_get_string_member(push, "direction");
+				
+				if (timestamp > last_message_timestamp) {
+					gchar *body_html = purple_strdup_withhtml(body);
+					
+					if (direction[0] != 'o') {
+						serv_got_im(pba->pc, from, body_html, PURPLE_MESSAGE_RECV, timestamp);
+					} else {
+						const gchar *guid = json_object_get_string_member(push, "guid");
+						from = json_object_get_string_member(push, "receiver_email_normalized");
+						
+						if (!guid || !g_hash_table_remove(pba->sent_messages_hash, guid)) {
+							PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_IM, from, pba->account);
+							if (conv == NULL)
+							{
+								conv = purple_conversation_new(PURPLE_CONV_TYPE_IM, pba->account, from);
+							}
+							purple_conversation_write(conv, from, body_html, PURPLE_MESSAGE_SEND, timestamp);
+						}
+					}
+					
+					g_free(body_html);
+					
+					purple_account_set_int(pba->account, "last_message_timestamp", MAX(purple_account_get_int(pba->account, "last_message_timestamp", 0), timestamp));
+				}
+			}
+		}
+	}
+	
+	if (contacts != NULL) {
+		PurpleGroup *pbgroup;
 		
-		if (type && g_str_equal(type, "note")) {
-			const gchar *email = json_object_get_string_member(push, "sender_email");
-			const gchar *body = json_object_get_string_member(push, "body");
-			gdouble modified = json_object_get_double_member(push, "modified");
-			gchar *body_html = purple_strdup_withhtml(body);
+		pbgroup = purple_find_group("PushBullet");
+		if (!pbgroup)
+		{
+			pbgroup = purple_group_new("PushBullet");
+			purple_blist_add_group(pbgroup, NULL);
+		}
+		for(i = 0, len = json_array_get_length(contacts); i < len; i++) {
+			JsonObject *contact = json_array_get_object_element(contacts, i);
+			const gchar *email = json_object_get_string_member(contact, "email_normalized");
+			const gchar *name = json_object_get_string_member(contact, "name");
+			const gchar *image_url = json_object_get_string_member(contact, "image_url");
 			
-			serv_got_im(pba->pc, email, body_html, PURPLE_MESSAGE_RECV, (int) modified);
-			
-			g_free(body_html);
+			PurpleBuddy *buddy = purple_find_buddy(pba->account, email);
+			if (buddy == NULL)
+			{
+				buddy = purple_buddy_new(pba->account, email, name);
+				purple_blist_add_buddy(buddy, NULL, pbgroup, NULL);
+			}
 		}
 	}
 }
@@ -705,6 +758,35 @@ pb_get_everything_since(PushBulletAccount *pba, gint timestamp)
 	
 	g_free(everything_url);
 }
+
+
+
+void
+pb_add_buddy_with_invite(PurpleConnection *pc, PurpleBuddy *buddy, PurpleGroup *group, const char* message)
+{
+	PushBulletAccount *pba = pc->proto_data;
+	const gchar *contacts_url = "https://api.pushbullet.com/v2/contacts";
+	GString *postdata;
+	const gchar *buddy_name;
+	
+	buddy_name = purple_buddy_get_name(buddy);
+	if (!PB_IS_SMS(buddy_name)) {
+		postdata = g_string_new(NULL);
+		g_string_append_printf(postdata, "name=%s", purple_url_encode(purple_buddy_get_alias(buddy)));
+		g_string_append_printf(postdata, "email=%s", purple_url_encode(buddy_name));
+		
+		pb_fetch_url(pba, contacts_url, postdata->str, NULL, NULL);
+		
+		g_string_free(postdata, TRUE);
+	}
+}
+
+void 
+pb_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
+{
+	pb_add_buddy_with_invite(gc, buddy, group, _("Please authorize me so I can add you to my buddy list."));
+}
+
 
 static void
 pb_login(PurpleAccount *account)
