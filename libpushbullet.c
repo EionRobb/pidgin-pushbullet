@@ -99,7 +99,7 @@ pb_normalise_clean(const PurpleAccount *account, const char *who)
 gchar *
 pb_get_next_id(PushBulletAccount *pba)
 {
-	return g_strdup_printf("purple%x", pba->next_message_id++);
+	return g_strdup_printf("purple%x", g_random_int());
 }
 
 static void
@@ -655,6 +655,7 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 	JsonArray *devices = json_object_get_array_member(rootobj, "devices");
 	JsonArray *pushes = json_object_get_array_member(rootobj, "pushes");
 	JsonArray *contacts = json_object_get_array_member(rootobj, "contacts");
+	JsonArray *chats = json_object_get_array_member(rootobj, "chats");
 	gint i;
 	guint len;
 	
@@ -737,7 +738,13 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 				buddy = purple_buddy_new(pba->account, email, name);
 				purple_blist_add_buddy(buddy, NULL, pbgroup, NULL);
 			}
+			purple_prpl_got_user_status(pba->account, email, purple_primitive_get_id_from_type(PURPLE_STATUS_AVAILABLE), NULL);
 		}
+	}
+	
+	for(i = 0, len = json_array_get_length(chats); i < len; i++) {
+		JsonObject *chat = json_array_get_object_element(chats, i);
+	
 	}
 }
 
@@ -778,6 +785,11 @@ pb_add_buddy_with_invite(PurpleConnection *pc, PurpleBuddy *buddy, PurpleGroup *
 		pb_fetch_url(pba, contacts_url, postdata->str, NULL, NULL);
 		
 		g_string_free(postdata, TRUE);
+		purple_prpl_got_user_status(pba->account, buddy_name, purple_primitive_get_id_from_type(PURPLE_STATUS_AVAILABLE), NULL);
+	} else {
+		
+		purple_prpl_got_user_status(pba->account, buddy_name, "mobile", NULL);
+		purple_prpl_got_user_status(pba->account, buddy_name, purple_primitive_get_id_from_type(PURPLE_STATUS_AVAILABLE), NULL);
 	}
 }
 
