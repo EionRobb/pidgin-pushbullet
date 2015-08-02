@@ -16,6 +16,7 @@
 #include <accountopt.h>
 #include <debug.h>
 #include <prpl.h>
+#include <request.h>
 #include <version.h>
 
 #ifndef _
@@ -802,6 +803,51 @@ pb_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
 
 
 static void
+pb_oauth_set_access_token_cb(gpointer data, const gchar *access_token)
+{
+	PurpleAccount *account = data;
+	gchar *real_access_token;
+	const gchar *access_token_start;
+	gchar *strtmp;
+	
+	if (!access_token || !(*access_token)) {
+		return;
+	}
+	
+	if((access_token_start = strstr(access_token, "access_token=")))
+	{
+		access_token_start += 13;
+		real_access_token = g_strndup(access_token_start, strchr(access_token_start, '&') - access_token_start);
+		
+		strtmp = g_strdup(purple_url_decode(real_access_token));
+		g_free(real_access_token);
+		real_access_token = strtmp;
+	} else {
+		real_access_token = g_strdup(access_token);
+	}
+	
+	if (real_access_token && *real_access_token) {
+		purple_account_set_password(account, real_access_token);
+		purple_account_connect(account);
+	}
+	
+	g_free(real_access_token);
+}
+
+
+static void
+pb_oauth_request_access_token(PurpleAccount *account)
+{
+	purple_notify_uri(account, "https://www.pushbullet.com/authorize?client_id=0m8Tcu8rNSBxeWL65e6nTKmqXqZSIKEe&redirect_uri=https%3A%2F%2Fwww.pushbullet.com%2Flogin-success&response_type=token&scope=everything");
+	
+	purple_request_input(NULL, NULL, _("Set your Access Token"),
+					_("Copy the Success URL you are sent to after you accept"), NULL,
+					FALSE, FALSE, "https://www.pushbullet.com/login-success#access_token=...", 
+					_("OK"), G_CALLBACK(pb_oauth_set_access_token_cb), 
+					_("Cancel"), NULL, account, NULL, NULL, account);
+}
+
+static void
 pb_login(PurpleAccount *account)
 {
 	PushBulletAccount *pba;
@@ -813,12 +859,19 @@ pb_login(PurpleAccount *account)
 	pba = g_new0(PushBulletAccount, 1);
 	pba->account = account;
 	pba->pc = pc;
-	pba->sent_messages_hash = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
 	
 	password = purple_account_get_password(account);
 	if (password && *password) {
 		pba->access_token = g_strdup(password);
+	} else {
+		pb_oauth_request_access_token(account);
+		purple_connection_error_reason(pc, PURPLE_CONNECTION_ERROR_AUTHENTICATION_FAILED, _("Access Token required"));
+		g_free(pba);
+		
+		return;
 	}
+	
+	pba->sent_messages_hash = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
 	
 	pc->proto_data = pba;
 	
@@ -923,7 +976,7 @@ plugin_init(PurplePlugin *plugin)
 PurplePluginProtocolInfo prpl_info = {
 	/* options */
 	//TODO, use OPT_PROTO_IM_IMAGE for sending MMS messages
-	OPT_PROTO_SLASH_COMMANDS_NATIVE/*|OPT_PROTO_IM_IMAGE*/,
+	OPT_PROTO_SLASH_COMMANDS_NATIVE | OPT_PROTO_PASSWORD_OPTIONAL/*|OPT_PROTO_IM_IMAGE*/,
 
 	NULL,                /* user_splits */
 	NULL,                /* protocol_options */
