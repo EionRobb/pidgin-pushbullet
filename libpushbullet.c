@@ -689,8 +689,9 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 				gdouble modified = json_object_get_double_member(push, "modified");
 				time_t timestamp = (time_t) modified;
 				const gchar *direction = json_object_get_string_member(push, "direction");
+				gboolean dismissed = json_object_get_boolean_member(push, "dismissed");
 				
-				if (timestamp > last_message_timestamp) {
+				if (timestamp > last_message_timestamp && !dismissed) {
 					gchar *body_html = purple_strdup_withhtml(body);
 					
 					if (direction[0] != 'o') {
