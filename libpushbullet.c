@@ -14,6 +14,7 @@
 #include <json-glib/json-glib.h>
 
 #include <accountopt.h>
+#include <core.h>
 #include <debug.h>
 #include <prpl.h>
 #include <request.h>
@@ -660,6 +661,16 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 	gint i;
 	guint len;
 	
+	if (json_object_has_member(rootobj, "error")) {
+		JsonObject *error = json_object_get_object_member(rootobj, "error");
+		const gchar *type = json_object_get_string_member(error, "type");
+		const gchar *message = json_object_get_string_member(error, "message");
+		
+		//TODO check type
+		purple_connection_error_reason(pba->pc, PURPLE_CONNECTION_ERROR_AUTHENTICATION_FAILED, message);
+		return;
+	}
+	
 	for(i = 0, len = json_array_get_length(devices); i < len; i++) {
 		JsonObject *device = json_array_get_object_element(devices, i);
 		
@@ -808,6 +819,7 @@ pb_oauth_set_access_token_cb(gpointer data, const gchar *access_token)
 	PurpleAccount *account = data;
 	gchar *real_access_token;
 	const gchar *access_token_start;
+	const gchar *access_token_end;
 	gchar *strtmp;
 	
 	if (!access_token || !(*access_token)) {
@@ -817,7 +829,11 @@ pb_oauth_set_access_token_cb(gpointer data, const gchar *access_token)
 	if((access_token_start = strstr(access_token, "access_token=")))
 	{
 		access_token_start += 13;
-		real_access_token = g_strndup(access_token_start, strchr(access_token_start, '&') - access_token_start);
+		access_token_end = strchr(access_token_start, '&');
+		if (access_token_end)
+			real_access_token = g_strndup(access_token_start, access_token_end - access_token_start);
+		else
+			real_access_token = g_strdup(access_token_start);
 		
 		strtmp = g_strdup(purple_url_decode(real_access_token));
 		g_free(real_access_token);
@@ -827,7 +843,10 @@ pb_oauth_set_access_token_cb(gpointer data, const gchar *access_token)
 	}
 	
 	if (real_access_token && *real_access_token) {
+		purple_account_set_remember_password(account, TRUE);
 		purple_account_set_password(account, real_access_token);
+		
+		purple_account_set_enabled(account, purple_core_get_ui(), TRUE);
 		purple_account_connect(account);
 	}
 	
@@ -860,20 +879,19 @@ pb_login(PurpleAccount *account)
 	pba->account = account;
 	pba->pc = pc;
 	
+	pba->sent_messages_hash = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+	
+	pc->proto_data = pba;
+	
 	password = purple_account_get_password(account);
 	if (password && *password) {
 		pba->access_token = g_strdup(password);
 	} else {
 		pb_oauth_request_access_token(account);
 		purple_connection_error_reason(pc, PURPLE_CONNECTION_ERROR_AUTHENTICATION_FAILED, _("Access Token required"));
-		g_free(pba);
 		
 		return;
 	}
-	
-	pba->sent_messages_hash = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
-	
-	pc->proto_data = pba;
 	
 	if(pba->access_token)
 	{
@@ -998,7 +1016,7 @@ PurplePluginProtocolInfo prpl_info = {
 	NULL,                /* set_status */
 	NULL,                /* set_idle */
 	NULL,                /* change_passwd */
-	NULL,                /* add_buddy */
+	pb_add_buddy,        /* add_buddy */
 	NULL,                /* add_buddies */
 	NULL,                /* remove_buddy */
 	NULL,                /* remove_buddies */
@@ -1053,7 +1071,7 @@ PurplePluginProtocolInfo prpl_info = {
 	NULL,                /* set_public_alias */
 	NULL                 /* get_public_alias */
 #if PURPLE_MAJOR_VERSION == 2 && PURPLE_MINOR_VERSION >= 8
-,	NULL,                /* add_buddy_with_invite */
+,	pb_add_buddy_with_invite, /* add_buddy_with_invite */
 	NULL                 /* add_buddies_with_invite */
 #endif
 };
