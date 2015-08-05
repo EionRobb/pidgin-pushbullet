@@ -1,4 +1,6 @@
-#define PURPLE_PLUGINS
+#ifndef PURPLE_PLUGINS
+#	define PURPLE_PLUGINS
+#endif
 
 // Glib
 #include <glib.h>
@@ -119,7 +121,7 @@ pb_response_callback(PurpleUtilFetchUrlData *url_data, gpointer user_data, const
 	} else {
 		JsonNode *root = json_parser_get_root(parser);
 		
-		//purple_debug_misc("pushbullet", "Got response: %s\n", url_text);
+		purple_debug_misc("pushbullet", "Got response: %s\n", url_text);
 		if (conn->callback) {
 			conn->callback(conn->pba, root, conn->user_data);
 		}
@@ -190,8 +192,6 @@ pb_fetch_url(PushBulletAccount *pba, const gchar *url, const gchar *postdata, Pu
     } else {
         g_string_append(headers, "\r\n");
     }
-	
-	//purple_debug_misc("pushbullet", "Request headers are %s\n", headers->str);
     
     g_free(host);
     g_free(path);
@@ -204,8 +204,9 @@ pb_fetch_url(PushBulletAccount *pba, const gchar *url, const gchar *postdata, Pu
 	g_free(proxy_url);
 }
 
-
+static void pb_start_polling(PushBulletAccount *pba);
 static void pb_get_everything_since(PushBulletAccount *pba, gint timestamp);
+static void pb_get_phone_threads(PushBulletAccount *pba, const gchar *device);
 
 static void
 pb_process_frame(PushBulletAccount *pba, const gchar *frame)
@@ -230,6 +231,12 @@ pb_process_frame(PushBulletAccount *pba, const gchar *frame)
 			pb_get_everything_since(pba, purple_account_get_int(pba->account, "last_message_timestamp", 0));
 		} else if (g_str_equal(type, "push")) {
 			JsonObject *push = json_object_get_object_member(message, "push");
+			//{"type":"push","targets":["stream","android","ios"],"push":{"guid":"purple6e94d282","type":"messaging_extension_reply","package_name":"com.pushbullet.android","target_device_iden":"uffvytgsjAoIRwhIL6","conversation_iden":"+6421478252","message":"test2"}}
+			//{"type":"push","targets":["stream"],"push":{"type":"sms_changed"}}
+			type = json_object_get_string_member(push, "type");
+			if (g_str_equal(type, "sms_changed")) {
+				pb_get_phone_threads(pba, NULL);
+			}
 		}
 	}
 	
@@ -273,9 +280,14 @@ pb_socket_got_data(gpointer userdata, PurpleSslConnection *conn, PurpleInputCond
 		if (packet_code != 129) {
 			if (packet_code == 136) {
 				purple_debug_error("pushbullet", "websocket closed\n");
+				
 				purple_ssl_close(conn);
 				pba->websocket = NULL;
 				pba->websocket_header_received = FALSE;
+				
+				// revert to polling
+				pb_start_polling(pba);
+				
 				return;
 			}
 			purple_debug_error("pushbullet", "unknown websocket error %d\n", packet_code);
@@ -294,7 +306,7 @@ pb_socket_got_data(gpointer userdata, PurpleSslConnection *conn, PurpleInputCond
 			purple_ssl_read(conn, &frame_len, 8);
 			frame_len = GUINT64_FROM_BE(frame_len);
 		}
-		//purple_debug_info("pushbullet", "frame_len: %d\n", frame_len);
+		purple_debug_info("pushbullet", "frame_len: %d\n", frame_len);
 		
 		frame = g_new0(gchar, frame_len + 1);
 		purple_ssl_read(conn, frame, frame_len);
@@ -335,6 +347,12 @@ static void
 pb_socket_failed(PurpleSslConnection *conn, PurpleSslErrorType errortype, gpointer userdata)
 {
 	PushBulletAccount *pba = userdata;
+	
+	pba->websocket = NULL;
+	pba->websocket_header_received = FALSE;
+	
+	// revert to polling
+	pb_start_polling(pba);
 }
 
 static void
@@ -564,6 +582,10 @@ pb_get_phone_threads(PushBulletAccount *pba, const gchar *device)
 	if (device == NULL) {
 		device = pba->main_sms_device;
 	}
+	if (device == NULL) {
+		purple_debug_error("pushbullet", "No SMS device to download threads from\n");
+		return;
+	}
 	device_copy = g_strdup(device);
 
 	phonebook_url = g_strdup_printf("https://api.pushbullet.com/v2/permanents/%s_threads",
@@ -577,12 +599,44 @@ pb_get_phone_threads(PushBulletAccount *pba, const gchar *device)
 static gboolean
 pb_poll_phone_threads(PushBulletAccount *pba)
 {
-	if (purple_account_is_connected(pba->account)) {
+	if (purple_account_is_connected(pba->account) && pba->main_sms_device) {
 		pb_get_phone_threads(pba, NULL);
 		return TRUE;
 	}
 	
+	pba->phone_threads_poll = 0;
+	
 	return FALSE;
+}
+
+static gboolean
+pb_poll_everything(PushBulletAccount *pba)
+{
+	if (purple_account_is_connected(pba->account)) {
+		pb_get_everything_since(pba, purple_account_get_int(pba->account, "last_message_timestamp", 0));
+		return TRUE;
+	}
+	
+	pba->everything_poll = 0;
+	
+	return FALSE;
+}
+
+static void
+pb_start_polling(PushBulletAccount *pba)
+{
+	if (!purple_account_is_connected(pba->account))
+		return;
+	
+	if (!pba->phone_threads_poll && pba->main_sms_device) {
+		pb_get_phone_threads(pba, NULL);
+		pba->phone_threads_poll = purple_timeout_add_seconds(10, (GSourceFunc) pb_poll_phone_threads, pba);
+	}
+	
+	if (!pba->everything_poll) {
+		pb_get_everything_since(pba, purple_account_get_int(pba->account, "last_message_timestamp", 0));
+		pba->everything_poll = purple_timeout_add_seconds(10, (GSourceFunc) pb_poll_everything, pba);
+	}
 }
 
 static void
@@ -680,9 +734,8 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 			
 			pb_get_phonebook(pba, pba->main_sms_device);
 			
-			if (!pba->phone_threads_poll) {
-				pb_poll_phone_threads(pba);
-				pba->phone_threads_poll = purple_timeout_add_seconds(10, (GSourceFunc) pb_poll_phone_threads, pba);
+			if (!pba->websocket) {
+				pb_start_polling(pba);
 			}
 			
 			break; //TODO handle more than one
@@ -902,9 +955,6 @@ pb_login(PurpleAccount *account)
 		if (purple_account_get_string(account, "main_sms_device", NULL) != NULL) {
 			pba->main_sms_device = g_strdup(purple_account_get_string(account, "main_sms_device", NULL));
 			pb_get_phonebook(pba, pba->main_sms_device);
-			
-			pb_poll_phone_threads(pba);
-			pba->phone_threads_poll = purple_timeout_add_seconds(10, (GSourceFunc) pb_poll_phone_threads, pba);
 		}
 		
 		pb_get_everything(pba);
@@ -924,6 +974,7 @@ pb_close(PurpleConnection *pc)
 	g_free(pba->main_sms_device); pba->main_sms_device = NULL;
 	
 	purple_timeout_remove(pba->phone_threads_poll);
+	purple_timeout_remove(pba->everything_poll);
 	purple_ssl_close(pba->websocket);
 	
 	g_hash_table_destroy(pba->sent_messages_hash); pba->sent_messages_hash = NULL;
