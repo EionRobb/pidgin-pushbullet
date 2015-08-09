@@ -358,16 +358,6 @@ pb_socket_failed(PurpleSslConnection *conn, PurpleSslErrorType errortype, gpoint
 static void
 pb_start_socket(PushBulletAccount *pba)
 {
-	// GET /subscribe/%s HTTP/1.1
-	// Host: stream.pushbullet.com
-	// Connection: Upgrade
-	// Pragma: no-cache
-	// Cache-Control: no-cache
-	// Upgrade: websocket
-	// Sec-WebSocket-Version: 13
-	// Sec-WebSocket-Key: abc123
-	// Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits
-	
 	pba->websocket = purple_ssl_connect(pba->account, "stream.pushbullet.com", 443, pb_socket_connected, pb_socket_failed, pba);
 }
 
@@ -747,39 +737,88 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 		for(i = json_array_get_length(pushes); i > 0; i--) {
 			JsonObject *push = json_array_get_object_element(pushes, i - 1);
 			const gchar *type = json_object_get_string_member(push, "type");
+			gdouble modified;
+			time_t timestamp;
+			gboolean dismissed;
 			
-			if (type && g_str_equal(type, "note")) {
+			if (!type)
+				continue;
+			
+			modified = json_object_get_double_member(push, "modified");
+			timestamp = (time_t) modified;
+			dismissed = json_object_get_boolean_member(push, "dismissed");
+			
+			if (timestamp <= last_message_timestamp || dismissed) {
+				continue;
+			}
+			
+			
+			if (g_str_equal(type, "note") || g_str_equal(type, "link") || g_str_equal(type, "file")) {
 				const gchar *from = json_object_get_string_member(push, "sender_email_normalized");
 				const gchar *body = json_object_get_string_member(push, "body");
-				gdouble modified = json_object_get_double_member(push, "modified");
-				time_t timestamp = (time_t) modified;
 				const gchar *direction = json_object_get_string_member(push, "direction");
-				gboolean dismissed = json_object_get_boolean_member(push, "dismissed");
+				gchar *body_html;
 				
-				if (timestamp > last_message_timestamp && !dismissed) {
-					gchar *body_html = purple_strdup_withhtml(body);
-					
-					if (direction[0] != 'o') {
-						serv_got_im(pba->pc, from, body_html, PURPLE_MESSAGE_RECV, timestamp);
+				if (from == NULL) {
+					if (!json_object_has_member(push, "sender_name")) {
+						purple_debug_error("pushbullet", "no sender name/email\n");
+						continue;
+					}
+					from = json_object_get_string_member(push, "sender_name");
+				}
+				
+				if (body && *body) {
+					body_html = purple_strdup_withhtml(body);
+				} else {
+					const gchar *title = json_object_get_string_member(push, "title");
+					if (title && *title) {
+						body_html = purple_strdup_withhtml(title);
 					} else {
-						const gchar *guid = json_object_get_string_member(push, "guid");
-						from = json_object_get_string_member(push, "receiver_email_normalized");
-						
-						if (!guid || !g_hash_table_remove(pba->sent_messages_hash, guid)) {
-							PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_IM, from, pba->account);
-							if (conv == NULL)
-							{
-								conv = purple_conversation_new(PURPLE_CONV_TYPE_IM, pba->account, from);
-							}
-							purple_conversation_write(conv, from, body_html, PURPLE_MESSAGE_SEND, timestamp);
-						}
+						body_html = "Message";
+					}
+				}
+				
+				if (json_object_has_member(push, "url")) {
+					gchar *body_with_link = g_strconcat("<a href=\"", json_object_get_string_member(push, "url"), "\">", body_html, "</a>", NULL);
+					g_free(body_html);
+					body_html = body_with_link;
+				} else if (FALSE && json_object_has_member(push, "image_url")) {
+					//TODO treat as inline image
+					const gchar *image_url = json_object_get_string_member(push, "image_url");
+				} else if (json_object_has_member(push, "file_url")) {
+					gchar *body_with_link;
+					const gchar *file_name = json_object_get_string_member(push, "file_name");
+					
+					if (file_name && *file_name) {
+						g_free(body_html);
+						body_html = purple_strdup_withhtml(file_name);
 					}
 					
+					body_with_link = g_strconcat("<a href=\"", json_object_get_string_member(push, "file_url"), "\">", json_object_get_string_member(push, "file_name"), "</a>", NULL);
 					g_free(body_html);
-					
-					purple_account_set_int(pba->account, "last_message_timestamp", MAX(purple_account_get_int(pba->account, "last_message_timestamp", 0), timestamp));
+					body_html = body_with_link;
 				}
+				
+				if (direction[0] != 'o') {
+					serv_got_im(pba->pc, from, body_html, PURPLE_MESSAGE_RECV, timestamp);
+				} else {
+					const gchar *guid = json_object_get_string_member(push, "guid");
+					from = json_object_get_string_member(push, "receiver_email_normalized");
+					
+					if (!guid || !g_hash_table_remove(pba->sent_messages_hash, guid)) {
+						PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_IM, from, pba->account);
+						if (conv == NULL)
+						{
+							conv = purple_conversation_new(PURPLE_CONV_TYPE_IM, pba->account, from);
+						}
+						purple_conversation_write(conv, from, body_html, PURPLE_MESSAGE_SEND, timestamp);
+					}
+				}
+				
+				g_free(body_html);
 			}
+				
+			purple_account_set_int(pba->account, "last_message_timestamp", MAX(purple_account_get_int(pba->account, "last_message_timestamp", 0), timestamp));
 		}
 	}
 	
