@@ -384,6 +384,7 @@ pb_send_im(PurpleConnection *pc, const gchar *who, const gchar *message, PurpleM
 		//json_object_set_string_member(push, "source_user_iden", pba->iden); //TODO supply this
 		json_object_set_string_member(push, "target_device_iden", pba->main_sms_device);
 		json_object_set_string_member(push, "conversation_iden", who);
+		json_object_set_boolean_member(push, "encrypted", FALSE);
 		
 		stripped = g_strstrip(purple_markup_strip_html(message));
 		json_object_set_string_member(push, "message", stripped);
@@ -502,8 +503,9 @@ pb_got_phone_thread(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 static void
 pb_get_phone_thread_by_id(PushBulletAccount *pba, const gchar *device, const gchar *id, const gchar *from)
 {
-	gchar *thread_url;
+	gchar *postdata;
 	gchar *from_copy;
+	const gchar *thread_url = "https://api.pushbullet.com/v3/get-permanent";
 	
 	if (id == NULL || id[0] == '\0')
 		return;
@@ -511,14 +513,17 @@ pb_get_phone_thread_by_id(PushBulletAccount *pba, const gchar *device, const gch
 	if (device == NULL) {
 		device = pba->main_sms_device;
 	}
+	if (device == NULL) {
+		purple_debug_error("pushbullet", "No SMS device to download threads from\n");
+		return;
+	}
 	from_copy = g_strdup(from);
 
-	thread_url = g_strdup_printf("https://api.pushbullet.com/v2/permanents/%s_thread_%s?",
-									purple_url_encode(device), id);
+	postdata = g_strdup_printf("{\"key\":\"%s_thread_%s\"}", device, id);
 	
-	pb_fetch_url(pba, thread_url, NULL, pb_got_phone_thread, from_copy);
+	pb_fetch_url(pba, thread_url, postdata, pb_got_phone_thread, from_copy);
 	
-	g_free(thread_url);
+	g_free(postdata);
 }
 
 static void
@@ -566,8 +571,9 @@ pb_got_phone_threads(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 static void
 pb_get_phone_threads(PushBulletAccount *pba, const gchar *device)
 {
-	gchar *phonebook_url;
+	const gchar *phonebook_url = "https://api.pushbullet.com/v3/get-permanent";
 	gchar *device_copy;
+	gchar *postdata;
 	
 	if (device == NULL) {
 		device = pba->main_sms_device;
@@ -578,12 +584,11 @@ pb_get_phone_threads(PushBulletAccount *pba, const gchar *device)
 	}
 	device_copy = g_strdup(device);
 
-	phonebook_url = g_strdup_printf("https://api.pushbullet.com/v2/permanents/%s_threads",
-									purple_url_encode(device_copy));
+	postdata = g_strdup_printf("{\"key\":\"%s_threads\"}", device_copy);
 	
-	pb_fetch_url(pba, phonebook_url, NULL, pb_got_phone_threads, device_copy);
+	pb_fetch_url(pba, phonebook_url, postdata, pb_got_phone_threads, device_copy);
 	
-	g_free(phonebook_url);
+	g_free(postdata);
 }
 
 static gboolean
@@ -794,7 +799,7 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 						body_html = purple_strdup_withhtml(file_name);
 					}
 					
-					body_with_link = g_strconcat("<a href=\"", json_object_get_string_member(push, "file_url"), "\">", json_object_get_string_member(push, "file_name"), "</a>", NULL);
+					body_with_link= g_strconcat("<a href=\"", json_object_get_string_member(push, "file_url"), "\">", json_object_get_string_member(push, "file_name"), "</a>", NULL);
 					g_free(body_html);
 					body_html = body_with_link;
 				}
