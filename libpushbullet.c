@@ -460,7 +460,8 @@ pb_got_phone_thread(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 	PurpleAccount *account = pba->account;
 	PurpleConnection *pc = pba->pc;
 	JsonObject *rootobj = json_node_get_object(node);
-	JsonArray *thread = json_object_get_array_member(rootobj, "thread");
+	JsonObject *data = json_object_get_object_member(rootobj, "data");
+	JsonArray *thread = json_object_get_array_member(data, "thread");
 	gint i;
 	guint len;
 	gchar *from = user_data;
@@ -531,7 +532,8 @@ pb_got_phone_threads(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 {
 	PurpleAccount *account = pba->account;
 	JsonObject *rootobj = json_node_get_object(node);
-	JsonArray *threads = json_object_get_array_member(rootobj, "threads");
+	JsonObject *data = json_object_get_object_member(rootobj, "data");
+	JsonArray *threads = json_object_get_array_member(data, "threads");
 	gint i;
 	guint len;
 	gchar *device = user_data;
@@ -757,6 +759,7 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 				continue;
 			}
 			
+			// {"active":true,"iden":"uffvytgsjApuAUIFRk","created":1.438895081423904e+09,"modified":1.438895081432786e+09,"type":"file","dismissed":false,"guid":"153b70f0-f7a6-4db9-a6f4-28b99fa416f1","direction":"self","sender_iden":"uffvytg","sender_email":"eionrobb@gmail.com","sender_email_normalized":"eionrobb@gmail.com","sender_name":"Eion Robb","receiver_iden":"uffvytg","receiver_email":"eionrobb@gmail.com","receiver_email_normalized":"eionrobb@gmail.com","target_device_iden":"uffvytgsjz7O3P0Jl6","source_device_iden":"uffvytgsjAoIRwhIL6","file_name":"IMG_20150807_084618.jpg","file_type":"image/jpeg","file_url":"https://dl.pushbulletusercontent.com/FHOZdyzfvnoYZY0DP6oK1rGKiJpWCPc0/IMG_20150807_084618.jpg","image_width":4128,"image_height":2322,"image_url":"https://lh3.googleusercontent.com/WY5TK7h3mzD32qMcnxtqt-4PrYcWW1uWDHnRW2x1oJK8mnYk2v4HbZrRjIQkiYdxMKQSdNI8GGPqfO6s6tEyuRVLzeA"}
 			
 			if (g_str_equal(type, "note") || g_str_equal(type, "link") || g_str_equal(type, "file")) {
 				const gchar *from = json_object_get_string_member(push, "sender_email_normalized");
