@@ -474,6 +474,25 @@ pb_offline_msg(const PurpleBuddy *buddy)
 }
 
 static void
+pb_got_mms_image(PurpleUtilFetchUrlData *url_data, gpointer user_data, const gchar *url_text, gsize len, const gchar *error_message)
+{
+	PurpleConversation *conv = user_data;
+	gint icon_id;
+	gchar *msg_tmp;
+	
+	if (!url_text || !url_text[0] || url_text[0] == '{')
+		return;
+	
+	icon_id = purple_imgstore_add_with_id((gpointer)url_text, len, NULL);
+	
+	msg_tmp = g_strdup_printf("<img id='%d'>", icon_id);
+	purple_conversation_write(conv, conv->name, msg_tmp, PURPLE_MESSAGE_SYSTEM, time(NULL));
+	g_free(msg_tmp);
+	
+	purple_imgstore_unref_by_id(icon_id);
+}
+
+static void
 pb_got_phone_thread(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 {
 	PurpleAccount *account = pba->account;
@@ -488,6 +507,10 @@ pb_got_phone_thread(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 	gint purple_last_message_timestamp = purple_account_get_int(account, "last_message_timestamp", 0);
 	gint newest_phone_message_id = purple_account_get_int(account, "newest_phone_message_id", 0);
 	
+	/*
+	{"id":"652","type":"sms","timestamp":1440484608,"direction":"outgoing","body":"message","status":"sent"},
+	{"id":"5","type":"mms","timestamp":1440484096,"direction":"incoming","recipient_index":0,"body":"","image_urls":["url1234"]}
+	*/
 	for(i = json_array_get_length(thread); i > 0; i--)
 	{
 		JsonObject *message = json_array_get_object_element(thread, i - 1);
@@ -511,6 +534,22 @@ pb_got_phone_thread(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 				}
 			}
 			g_free(body_html);
+			
+			if (json_object_has_member(message, "image_urls")) {
+				JsonArray *image_urls = json_object_get_array_member(message, "image_urls");
+				guint j, image_urls_len;
+				
+				if (conv == NULL)
+				{
+					conv = purple_conversation_new(PURPLE_CONV_TYPE_IM, account, from);
+				}
+				
+				for(j = 0, image_urls_len = json_array_get_length(image_urls); j < image_urls_len; j++) {
+					const gchar *image_url = json_array_get_string_element(thread, j);
+					
+					purple_util_fetch_url_request_len_with_account(pba->account, image_url, TRUE, "Pidgin", TRUE, NULL, FALSE, 6553500, pb_got_mms_image, conv);
+				}
+			}
 			
 			purple_account_set_int(account, "last_message_timestamp", MAX(purple_account_get_int(account, "last_message_timestamp", 0), timestamp));
 			purple_account_set_int(account, "newest_phone_message_id", MAX(purple_account_get_int(account, "newest_phone_message_id", 0), id));
