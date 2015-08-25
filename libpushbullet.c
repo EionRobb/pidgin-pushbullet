@@ -110,19 +110,22 @@ static void
 pb_set_base64_icon_for_buddy(const gchar *base64_icon, PurpleBuddy *buddy)
 {
 	PurpleBuddyIcon *icon;
-	guchar icon_data;
+	guchar *icon_data;
 	gsize icon_len;
-	const gchar *checksum;
+	gchar *checksum;
 	
-	checksum = g_str_hash(base64_icon);
-	if (g_str_equal(purple_buddy_icons_get_checksum_for_user(buddy), checksum))
+	checksum = g_strdup_printf("%ud", g_str_hash(base64_icon));
+	if (g_str_equal(purple_buddy_icons_get_checksum_for_user(buddy), checksum)) {
+		g_free(checksum);
 		return;
+	}
 	
 	icon_data = purple_base64_decode(base64_icon, &icon_len);
 	
 	icon = purple_buddy_icon_new(purple_buddy_get_account(buddy), purple_buddy_get_name(buddy), icon_data, icon_len, checksum);
 	
 	g_free(icon_data);
+	g_free(checksum);
 }
 
 static void
