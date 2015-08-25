@@ -100,10 +100,29 @@ pb_normalise_clean(const PurpleAccount *account, const char *who)
 	return normalised;
 }
 
-gchar *
+static gchar *
 pb_get_next_id(PushBulletAccount *pba)
 {
 	return g_strdup_printf("purple%x", g_random_int());
+}
+
+static void
+pb_set_base64_icon_for_buddy(const gchar *base64_icon, PurpleBuddy *buddy)
+{
+	PurpleBuddyIcon *icon;
+	guchar icon_data;
+	gsize icon_len;
+	const gchar *checksum;
+	
+	checksum = g_str_hash(base64_icon);
+	if (g_str_equal(purple_buddy_icons_get_checksum_for_user(buddy), checksum))
+		return;
+	
+	icon_data = purple_base64_decode(base64_icon, &icon_len);
+	
+	icon = purple_buddy_icon_new(purple_buddy_get_account(buddy), purple_buddy_get_name(buddy), icon_data, icon_len, checksum);
+	
+	g_free(icon_data);
 }
 
 static void
@@ -550,6 +569,10 @@ pb_got_phone_threads(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 		if (json_array_get_length(recipients) > 0) {
 			JsonObject *first_recipient = json_array_get_object_element(recipients, 0);
 			from = json_object_get_string_member(first_recipient, "number");
+			
+			if (json_object_has_member(first_recipient, "thumbnail")) {
+				pb_set_base64_icon_for_buddy(json_object_get_string_member(first_recipient, "thumbnail"), purple_find_buddy(account, from));
+			}
 		}
 		if (from == NULL) {
 			continue;
