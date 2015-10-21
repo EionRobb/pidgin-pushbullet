@@ -113,9 +113,11 @@ pb_set_base64_icon_for_buddy(const gchar *base64_icon, PurpleBuddy *buddy)
 	guchar *icon_data;
 	gsize icon_len;
 	gchar *checksum;
+	const gchar *old_checksum;
 	
 	checksum = g_strdup_printf("%ud", g_str_hash(base64_icon));
-	if (g_str_equal(purple_buddy_icons_get_checksum_for_user(buddy), checksum)) {
+	old_checksum = purple_buddy_icons_get_checksum_for_user(buddy);
+	if (old_checksum && purple_strequal(old_checksum, checksum)) {
 		g_free(checksum);
 		return;
 	}
@@ -249,14 +251,14 @@ pb_process_frame(PushBulletAccount *pba, const gchar *frame)
 	if (root != NULL) {
 		JsonObject *message = json_node_get_object(root);
 		const gchar *type = json_object_get_string_member(message, "type");
-		if (g_str_equal(type, "tickle")) {
+		if (purple_strequal(type, "tickle")) {
 			pb_get_everything_since(pba, purple_account_get_int(pba->account, "last_message_timestamp", 0));
-		} else if (g_str_equal(type, "push")) {
+		} else if (purple_strequal(type, "push")) {
 			JsonObject *push = json_object_get_object_member(message, "push");
 			//{"type":"push","targets":["stream","android","ios"],"push":{"guid":"purple6e94d282","type":"messaging_extension_reply","package_name":"com.pushbullet.android","target_device_iden":"uffvytgsjAoIRwhIL6","conversation_iden":"+6421478252","message":"test2"}}
 			//{"type":"push","targets":["stream"],"push":{"type":"sms_changed"}}
 			type = json_object_get_string_member(push, "type");
-			if (g_str_equal(type, "sms_changed")) {
+			if (purple_strequal(type, "sms_changed")) {
 				pb_get_phone_threads(pba, NULL);
 			}
 		}
@@ -477,7 +479,7 @@ pb_offline_msg(const PurpleBuddy *buddy)
 }
 
 static void
-pb_got_mms_image(PurpleUtilFetchUrlData *url_data, gpointer user_data, const gchar *url_text, gsize len, const gchar *error_message)
+pb_got_conv_image(PurpleUtilFetchUrlData *url_data, gpointer user_data, const gchar *url_text, gsize len, const gchar *error_message)
 {
 	PurpleConversation *conv = user_data;
 	gint icon_id;
@@ -493,6 +495,12 @@ pb_got_mms_image(PurpleUtilFetchUrlData *url_data, gpointer user_data, const gch
 	g_free(msg_tmp);
 	
 	purple_imgstore_unref_by_id(icon_id);
+}
+
+static void
+pb_download_image_to_conv(const gchar *url, PurpleConversation *conv)
+{
+	purple_util_fetch_url_request_len_with_account(purple_conversation_get_account(conv), url, TRUE, "Pidgin", TRUE, NULL, FALSE, 6553500, pb_got_conv_image, conv);
 }
 
 static void
@@ -550,7 +558,7 @@ pb_got_phone_thread(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 				for(j = 0, image_urls_len = json_array_get_length(image_urls); j < image_urls_len; j++) {
 					const gchar *image_url = json_array_get_string_element(thread, j);
 					
-					purple_util_fetch_url_request_len_with_account(pba->account, image_url, TRUE, "Pidgin", TRUE, NULL, FALSE, 6553500, pb_got_mms_image, conv);
+					pb_download_image_to_conv(image_url, conv);
 				}
 			}
 			
@@ -826,7 +834,7 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 			
 			// {"active":true,"iden":"uffvytgsjApuAUIFRk","created":1.438895081423904e+09,"modified":1.438895081432786e+09,"type":"file","dismissed":false,"guid":"153b70f0-f7a6-4db9-a6f4-28b99fa416f1","direction":"self","sender_iden":"uffvytg","sender_email":"eionrobb@gmail.com","sender_email_normalized":"eionrobb@gmail.com","sender_name":"Eion Robb","receiver_iden":"uffvytg","receiver_email":"eionrobb@gmail.com","receiver_email_normalized":"eionrobb@gmail.com","target_device_iden":"uffvytgsjz7O3P0Jl6","source_device_iden":"uffvytgsjAoIRwhIL6","file_name":"IMG_20150807_084618.jpg","file_type":"image/jpeg","file_url":"https://dl.pushbulletusercontent.com/FHOZdyzfvnoYZY0DP6oK1rGKiJpWCPc0/IMG_20150807_084618.jpg","image_width":4128,"image_height":2322,"image_url":"https://lh3.googleusercontent.com/WY5TK7h3mzD32qMcnxtqt-4PrYcWW1uWDHnRW2x1oJK8mnYk2v4HbZrRjIQkiYdxMKQSdNI8GGPqfO6s6tEyuRVLzeA"}
 			
-			if (g_str_equal(type, "note") || g_str_equal(type, "link") || g_str_equal(type, "file")) {
+			if (purple_strequal(type, "note") || purple_strequal(type, "link") || purple_strequal(type, "file")) {
 				const gchar *from = json_object_get_string_member(push, "sender_email_normalized");
 				const gchar *body = json_object_get_string_member(push, "body");
 				const gchar *direction = json_object_get_string_member(push, "direction");
@@ -855,9 +863,17 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 					gchar *body_with_link = g_strconcat("<a href=\"", json_object_get_string_member(push, "url"), "\">", body_html, "</a>", NULL);
 					g_free(body_html);
 					body_html = body_with_link;
-				} else if (FALSE && json_object_has_member(push, "image_url")) {
-					//TODO treat as inline image
+					
+				} else if (json_object_has_member(push, "image_url")) {
 					const gchar *image_url = json_object_get_string_member(push, "image_url");
+					PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_IM, from, pba->account);
+					
+					if (conv == NULL)
+					{
+						conv = purple_conversation_new(PURPLE_CONV_TYPE_IM, pba->account, from);
+					}
+					pb_download_image_to_conv(image_url, conv);
+					
 				} else if (json_object_has_member(push, "file_url")) {
 					gchar *body_with_link;
 					const gchar *file_name = json_object_get_string_member(push, "file_name");
