@@ -274,6 +274,8 @@ pb_socket_got_data(gpointer userdata, PurpleSslConnection *conn, PurpleInputCond
 	gchar *frame;
 	guchar packet_code, length_code;
 	guint64 frame_len;
+	int read_len = 0;
+	gboolean done_some_reads = FALSE;
 	
 	
 	if (G_UNLIKELY(!pba->websocket_header_received)) {
@@ -297,10 +299,12 @@ pb_socket_got_data(gpointer userdata, PurpleSslConnection *conn, PurpleInputCond
 		}
 		
 		pba->websocket_header_received = TRUE;
+		done_some_reads = TRUE;
 	}
 	
 	packet_code = 0;
-	while(purple_ssl_read(conn, &packet_code, 1) == 1) {
+	while((read_len = purple_ssl_read(conn, &packet_code, 1)) == 1) {
+		done_some_reads = TRUE;
 		if (packet_code != 129) {
 			if (packet_code == 136) {
 				purple_debug_error("pushbullet", "websocket closed\n");
@@ -339,6 +343,10 @@ pb_socket_got_data(gpointer userdata, PurpleSslConnection *conn, PurpleInputCond
 		
 		g_free(frame);
 		packet_code = 0;
+	}
+	
+	if (done_some_reads == FALSE && read_len == 0) {
+		purple_connection_error_reason(pba->pc, PURPLE_CONNECTION_ERROR_NETWORK_ERROR, "Lost connection to server");
 	}
 }
 
