@@ -162,8 +162,6 @@ pb_fetch_url(PushBulletAccount *pba, const gchar *url, const gchar *postdata, Pu
 	GString *headers;
     gchar *host = NULL, *path = NULL, *user = NULL, *password = NULL;
     int port;
-	PurpleProxyInfo *proxy_info;
-	gchar *proxy_url;
 	PushBulletProxyConnection *conn;
 	
 	account = pba->account;
@@ -179,19 +177,9 @@ pb_fetch_url(PushBulletAccount *pba, const gchar *url, const gchar *postdata, Pu
 	
 	headers = g_string_new(NULL);
 	
-	proxy_info = purple_proxy_get_setup(account);
-	if (purple_proxy_info_get_type(proxy_info) == PURPLE_PROXY_USE_GLOBAL)
-		proxy_info = purple_global_proxy_get_info();
-	if (purple_proxy_info_get_type(proxy_info) == PURPLE_PROXY_HTTP)
-	{
-		g_string_append_printf(headers, "%s %s HTTP/1.0\r\n", (postdata ? "POST" : "GET"), url);
-		proxy_url = g_strdup_printf("http://%s:%d", purple_proxy_info_get_host(proxy_info), purple_proxy_info_get_port(proxy_info));
-	} else {
-		//Use the full 'url' until libpurple can handle path's longer than 256 chars
-		g_string_append_printf(headers, "%s /%s HTTP/1.0\r\n", (postdata ? "POST" : "GET"), path);
-		//g_string_append_printf(headers, "%s %s HTTP/1.0\r\n", (postdata ? "POST" : "GET"), url);
-		proxy_url = g_strdup(url);
-	}
+	//Use the full 'url' until libpurple can handle path's longer than 256 chars
+	g_string_append_printf(headers, "%s /%s HTTP/1.0\r\n", (postdata ? "POST" : "GET"), path);
+	//g_string_append_printf(headers, "%s %s HTTP/1.0\r\n", (postdata ? "POST" : "GET"), url);
     g_string_append_printf(headers, "Connection: close\r\n");
     g_string_append_printf(headers, "Host: %s\r\n", host);
     g_string_append_printf(headers, "Accept: */*\r\n");
@@ -222,10 +210,9 @@ pb_fetch_url(PushBulletAccount *pba, const gchar *url, const gchar *postdata, Pu
     g_free(user);
     g_free(password);
     
-    purple_util_fetch_url_request_len_with_account(pba->account, proxy_url, FALSE, "Pidgin", TRUE, headers->str, FALSE, 6553500, pb_response_callback, conn);
+    purple_util_fetch_url_request_len_with_account(pba->account, url, FALSE, "Pidgin", TRUE, headers->str, FALSE, 6553500, pb_response_callback, conn);
 	
 	g_string_free(headers, TRUE);
-	g_free(proxy_url);
 }
 
 static void pb_start_polling(PushBulletAccount *pba);
