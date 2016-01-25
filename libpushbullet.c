@@ -394,26 +394,25 @@ pb_send_im(PurpleConnection *pc, const gchar *who, const gchar *message, PurpleM
 	if (PB_IS_SMS(who))
 	{
 		JsonObject *root = json_object_new();
-		JsonObject *push = json_object_new();
+		JsonObject *data = json_object_new();
+		JsonArray *addresses = json_array_new();
+		
+		json_array_add_string_element(addresses, who);
+		json_object_set_array_member(data, "addresses", addresses);
 		
 		guid = pb_get_next_id(pba);
-		json_object_set_string_member(push, "guid", guid);
-		json_object_set_string_member(push, "type", "messaging_extension_reply");
-		json_object_set_string_member(push, "package_name", "com.pushbullet.android");
-		//json_object_set_string_member(push, "source_user_iden", pba->iden); //TODO supply this
-		json_object_set_string_member(push, "target_device_iden", pba->main_sms_device);
-		json_object_set_string_member(push, "conversation_iden", who);
-		json_object_set_boolean_member(push, "encrypted", FALSE);
+		json_object_set_string_member(data, "guid", guid);
+		json_object_set_string_member(data, "target_device_iden", pba->main_sms_device);
+		json_object_set_boolean_member(data, "encrypted", FALSE);
 		
 		stripped = g_strstrip(purple_markup_strip_html(message));
-		json_object_set_string_member(push, "message", stripped);
+		json_object_set_string_member(data, "message", stripped);
 		g_free(stripped);
 		
-		json_object_set_object_member(root, "push", push);
-		json_object_set_string_member(root, "type", "push");
+		json_object_set_object_member(root, "data", data);
 		
 		postdata = pb_jsonobj_to_string(root);
-		pb_fetch_url(pba, "https://api.pushbullet.com/v2/ephemerals", postdata, NULL, NULL);
+		pb_fetch_url(pba, "https://api.pushbullet.com/v3/create-text", postdata, NULL, NULL);
 		g_free(postdata);
 		
 		json_object_unref(root);
@@ -753,7 +752,7 @@ pb_got_phonebook(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 static void
 pb_get_phonebook(PushBulletAccount *pba, const gchar *device)
 {
-	gchar *phonebook_url;
+	gchar *postdata;
 	gchar *device_copy;
 	
 	if (device == NULL) {
@@ -761,24 +760,32 @@ pb_get_phonebook(PushBulletAccount *pba, const gchar *device)
 	}
 	device_copy = g_strdup(device);
 
-	phonebook_url = g_strdup_printf("https://api.pushbullet.com/v2/permanents/phonebook_%s?",
-									purple_url_encode(device_copy));
+	postdata = g_strdup_printf("{\"key\":\"phonebook_%s\"}", purple_url_encode(device_copy));
 	
-	pb_fetch_url(pba, phonebook_url, NULL, pb_got_phonebook, device_copy);
+	pb_fetch_url(pba, "https://api.pushbullet.com/v3/get-permanent", postdata, pb_got_phonebook, device_copy);
 	
-	g_free(phonebook_url);
+	g_free(postdata);
 }
 
 static void
 pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 {
 	JsonObject *rootobj = json_node_get_object(node);
-	JsonArray *devices = json_object_get_array_member(rootobj, "devices");
-	JsonArray *pushes = json_object_get_array_member(rootobj, "pushes");
-	JsonArray *contacts = json_object_get_array_member(rootobj, "contacts");
-	JsonArray *chats = json_object_get_array_member(rootobj, "chats");
+	JsonArray *devices = json_object_has_member(rootobj, "devices") ? json_object_get_array_member(rootobj, "devices") : NULL;
+	JsonArray *pushes = json_object_has_member(rootobj, "pushes") ? json_object_get_array_member(rootobj, "pushes") : NULL;
+	JsonArray *contacts = json_object_has_member(rootobj, "contacts") ? json_object_get_array_member(rootobj, "contacts") : NULL;
+	JsonArray *chats = json_object_has_member(rootobj, "chats") ? json_object_get_array_member(rootobj, "chats") : NULL;
+	JsonArray *texts = json_object_has_member(rootobj, "texts") ? json_object_get_array_member(rootobj, "texts") : NULL;
 	gint i;
 	guint len;
+	PurpleGroup *pbgroup;
+	
+	pbgroup = purple_find_group("PushBullet");
+	if (!pbgroup)
+	{
+		pbgroup = purple_group_new("PushBullet");
+		purple_blist_add_group(pbgroup, NULL);
+	}
 	
 	if (json_object_has_member(rootobj, "error")) {
 		JsonObject *error = json_object_get_object_member(rootobj, "error");
@@ -790,20 +797,22 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 		return;
 	}
 	
-	for(i = 0, len = json_array_get_length(devices); i < len; i++) {
-		JsonObject *device = json_array_get_object_element(devices, i);
-		
-		if (pba->main_sms_device == NULL && json_object_get_boolean_member(device, "has_sms")) {
-			pba->main_sms_device = g_strdup(json_object_get_string_member(device, "iden"));
-			purple_account_set_string(pba->account, "main_sms_device", pba->main_sms_device);
+	if (devices != NULL) {
+		for(i = 0, len = json_array_get_length(devices); i < len; i++) {
+			JsonObject *device = json_array_get_object_element(devices, i);
 			
-			pb_get_phonebook(pba, pba->main_sms_device);
-			
-			if (!pba->websocket) {
-				pb_start_polling(pba);
+			if (pba->main_sms_device == NULL && json_object_get_boolean_member(device, "has_sms")) {
+				pba->main_sms_device = g_strdup(json_object_get_string_member(device, "iden"));
+				purple_account_set_string(pba->account, "main_sms_device", pba->main_sms_device);
+				
+				pb_get_phonebook(pba, pba->main_sms_device);
+				
+				if (!pba->websocket) {
+					pb_start_polling(pba);
+				}
+				
+				break; //TODO handle more than one
 			}
-			
-			break; //TODO handle more than one
 		}
 	}
 	
@@ -907,14 +916,6 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 	}
 	
 	if (contacts != NULL) {
-		PurpleGroup *pbgroup;
-		
-		pbgroup = purple_find_group("PushBullet");
-		if (!pbgroup)
-		{
-			pbgroup = purple_group_new("PushBullet");
-			purple_blist_add_group(pbgroup, NULL);
-		}
 		for(i = 0, len = json_array_get_length(contacts); i < len; i++) {
 			JsonObject *contact = json_array_get_object_element(contacts, i);
 			const gchar *email = json_object_get_string_member(contact, "email_normalized");
@@ -931,28 +932,65 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 		}
 	}
 	
-	for(i = 0, len = json_array_get_length(chats); i < len; i++) {
-		JsonObject *chat = json_array_get_object_element(chats, i);
+	if (chats != NULL) {
+		for(i = 0, len = json_array_get_length(chats); i < len; i++) {
+			JsonObject *chat = json_array_get_object_element(chats, i);
+			JsonObject *contact = json_object_get_object_member(chat, "with");
+			const gchar *email = json_object_get_string_member(contact, "email_normalized");
+			const gchar *name = json_object_get_string_member(contact, "name");
+			const gchar *image_url = json_object_get_string_member(contact, "image_url");
+			
+			PurpleBuddy *buddy = purple_find_buddy(pba->account, email);
+			if (buddy == NULL)
+			{
+				buddy = purple_buddy_new(pba->account, email, name);
+				purple_blist_add_buddy(buddy, NULL, pbgroup, NULL);
+			}
+			purple_prpl_got_user_status(pba->account, email, purple_primitive_get_id_from_type(PURPLE_STATUS_AVAILABLE), NULL);
+		}
+	}
 	
+	if (texts != NULL) {
+		for(i = 0, len = json_array_get_length(texts); i < len; i++) {
+			JsonObject *text = json_array_get_object_element(texts, i);
+		}
 	}
 }
 
 static void
 pb_get_everything(PushBulletAccount *pba)
 {
-	const gchar *everything_url = "https://api.pushbullet.com/v2/everything";
-	
-	pb_fetch_url(pba, everything_url, NULL, pb_got_everything, NULL);
+	pb_fetch_url(pba, "https://api.pushbullet.com/v2/pushes", NULL, pb_got_everything, NULL);
+	pb_fetch_url(pba, "https://api.pushbullet.com/v2/devices", NULL, pb_got_everything, NULL);
+	pb_fetch_url(pba, "https://api.pushbullet.com/v2/contacts", NULL, pb_got_everything, NULL);
+	pb_fetch_url(pba, "https://api.pushbullet.com/v2/chats", NULL, pb_got_everything, NULL);
+	pb_fetch_url(pba, "https://api.pushbullet.com/v2/texts", NULL, pb_got_everything, NULL);
 }
 
 static void
 pb_get_everything_since(PushBulletAccount *pba, gint timestamp)
 {
-	gchar *everything_url = g_strdup_printf("https://api.pushbullet.com/v2/everything?modified_after=%d", timestamp);
+	gchar *url;
 	
-	pb_fetch_url(pba, everything_url, NULL, pb_got_everything, NULL);
+	url = g_strdup_printf("https://api.pushbullet.com/v2/pushes?modified_after=%d", timestamp);
+	pb_fetch_url(pba, url, NULL, pb_got_everything, NULL);
+	g_free(url);
 	
-	g_free(everything_url);
+	url = g_strdup_printf("https://api.pushbullet.com/v2/devices?modified_after=%d", timestamp);
+	pb_fetch_url(pba, url, NULL, pb_got_everything, NULL);
+	g_free(url);
+	
+	url = g_strdup_printf("https://api.pushbullet.com/v2/contacts?modified_after=%d", timestamp);
+	pb_fetch_url(pba, url, NULL, pb_got_everything, NULL);
+	g_free(url);
+	
+	url = g_strdup_printf("https://api.pushbullet.com/v2/chats?modified_after=%d", timestamp);
+	pb_fetch_url(pba, url, NULL, pb_got_everything, NULL);
+	g_free(url);
+	
+	url = g_strdup_printf("https://api.pushbullet.com/v2/texts?modified_after=%d", timestamp);
+	pb_fetch_url(pba, url, NULL, pb_got_everything, NULL);
+	g_free(url);
 }
 
 
