@@ -775,7 +775,6 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 	JsonArray *pushes = json_object_has_member(rootobj, "pushes") ? json_object_get_array_member(rootobj, "pushes") : NULL;
 	JsonArray *contacts = json_object_has_member(rootobj, "contacts") ? json_object_get_array_member(rootobj, "contacts") : NULL;
 	JsonArray *chats = json_object_has_member(rootobj, "chats") ? json_object_get_array_member(rootobj, "chats") : NULL;
-	JsonArray *texts = json_object_has_member(rootobj, "texts") ? json_object_get_array_member(rootobj, "texts") : NULL;
 	gint i;
 	guint len;
 	PurpleGroup *pbgroup;
@@ -949,12 +948,6 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 			purple_prpl_got_user_status(pba->account, email, purple_primitive_get_id_from_type(PURPLE_STATUS_AVAILABLE), NULL);
 		}
 	}
-	
-	if (texts != NULL) {
-		for(i = 0, len = json_array_get_length(texts); i < len; i++) {
-			JsonObject *text = json_array_get_object_element(texts, i);
-		}
-	}
 }
 
 static void
@@ -964,7 +957,6 @@ pb_get_everything(PushBulletAccount *pba)
 	pb_fetch_url(pba, "https://api.pushbullet.com/v2/devices", NULL, pb_got_everything, NULL);
 	pb_fetch_url(pba, "https://api.pushbullet.com/v2/contacts", NULL, pb_got_everything, NULL);
 	pb_fetch_url(pba, "https://api.pushbullet.com/v2/chats", NULL, pb_got_everything, NULL);
-	pb_fetch_url(pba, "https://api.pushbullet.com/v2/texts", NULL, pb_got_everything, NULL);
 }
 
 static void
@@ -985,10 +977,6 @@ pb_get_everything_since(PushBulletAccount *pba, gint timestamp)
 	g_free(url);
 	
 	url = g_strdup_printf("https://api.pushbullet.com/v2/chats?modified_after=%d", timestamp);
-	pb_fetch_url(pba, url, NULL, pb_got_everything, NULL);
-	g_free(url);
-	
-	url = g_strdup_printf("https://api.pushbullet.com/v2/texts?modified_after=%d", timestamp);
 	pb_fetch_url(pba, url, NULL, pb_got_everything, NULL);
 	g_free(url);
 }
