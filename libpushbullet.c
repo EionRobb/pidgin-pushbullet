@@ -708,7 +708,8 @@ pb_got_phonebook(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 {
 	PurpleAccount *account = pba->account;
 	JsonObject *rootobj = json_node_get_object(node);
-	JsonArray *phonebook = json_object_get_array_member(rootobj, "phonebook");
+	JsonObject *data = json_object_get_object_member(rootobj, "data");
+	JsonArray *phonebook = json_object_get_array_member(data, "phonebook");
 	gint i;
 	guint len;
 	gchar *device = user_data;
