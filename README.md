@@ -23,10 +23,10 @@ Second, follow these steps to setup your access token:
  1. Add a Pushbullet account in pidgin with your Pushbullet email address (leave the password option blank)
  2. A prompt window will pop-up with "Approve or Deny" access in Pushbullet. Click "Approve".
  1. A new page will open with the "Success Token" in it. (In Google Chrome) While on the "Success Token" page do the following:
-    1. Open the Settings (three buttons to top right) > more tools > developer tools.
+    1. Open the Settings (three buttons to top right) > More tools > Developer tools.
     2. In the top columns, select "Application"
-    3. On the left hand side, select "Local Storage" > "https:/www.Pushbullet.com/"
-    4. In the "Key" column select "Dekstop", to the right in the "Value" Pushbullet access token is " "
+    3. On the left hand side, select "Local Storage" > "https://www.Pushbullet.com/"
+    4. In the "Key" column select "Desktop", to the right in the "Value" Pushbullet access token is " "
     5. Copy this code without the ' ' marks
- 4. In Pidgin, Accounts > manage accounts > modify the Pushbullet account
+ 4. In Pidgin, Accounts > Manage Accounts > Modify the Pushbullet account
  5. Paste the correct access code, obtained via the steps above, into the password section
