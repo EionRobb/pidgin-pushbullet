@@ -860,7 +860,7 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 					if (title && *title) {
 						body_html = purple_strdup_withhtml(title);
 					} else {
-						body_html = "Message";
+						body_html = g_strdup("Message");
 					}
 				}
 				
