@@ -135,7 +135,7 @@ pb_response_callback(PurpleUtilFetchUrlData *url_data, gpointer user_data, const
 {
 	PushBulletProxyConnection *conn = user_data;
 	JsonParser *parser = json_parser_new();
-	
+
 	if (!json_parser_load_from_data(parser, url_text, len, NULL))
 	{
 		purple_debug_error("pushbullet", "Error parsing response: %s\n", url_text);
@@ -186,7 +186,7 @@ pb_fetch_url(PushBulletAccount *pba, const gchar *url, const gchar *postdata, Pu
 	g_string_append_printf(headers, "User-Agent: Pidgin\r\n");
     
     if(pba->access_token && *(pba->access_token)) {
-        g_string_append_printf(headers, "Authorization: Bearer %s\r\n", pba->access_token);
+        g_string_append_printf(headers, "Access-Token: %s\r\n", pba->access_token);
     }
     
     if(postdata) {
@@ -205,6 +205,7 @@ pb_fetch_url(PushBulletAccount *pba, const gchar *url, const gchar *postdata, Pu
         g_string_append(headers, "\r\n");
     }
     
+
     g_free(host);
     g_free(path);
     g_free(user);
