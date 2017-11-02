@@ -529,6 +529,9 @@ pb_got_phone_thread(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 			if (direction[0] != 'o') {
 				serv_got_im(pc, from, body_html, PURPLE_MESSAGE_RECV, timestamp);
 			} else {
+			        if (purple_account_get_bool(account, "ignore_outbound_sms", FALSE)) {
+				  continue;
+				}
 				const gchar *guid = json_object_get_string_member(message, "guid");
 				if (!guid || !g_hash_table_remove(pba->sent_messages_hash, guid)) {
 					if (conv == NULL)
@@ -621,6 +624,11 @@ pb_got_phone_threads(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 		if (from == NULL) {
 			continue;
 		}
+		const char *str_value = purple_account_get_string(account, "ignore_sms_from", NULL);
+		if ((str_value != NULL) && (purple_str_has_prefix(from, str_value))) {
+		        continue;
+		}
+		purple_debug_info("pushbullet","from: %s\n",from);
 		if (json_object_has_member(thread, "latest"))
 		{
 			JsonObject *latest = json_object_get_object_member(thread, "latest");
@@ -1190,6 +1198,11 @@ plugin_init(PurplePlugin *plugin)
 	
 	option = purple_account_option_bool_new("Only show 'mobile' contacts", "mobile_contacts_only", FALSE);
 	prpl_info->protocol_options = g_list_append(prpl_info->protocol_options, option);
+	option = purple_account_option_string_new("Don't show SMS from this number", "ignore_sms_from", NULL);
+	prpl_info->protocol_options = g_list_append(prpl_info->protocol_options, option);
+	option = purple_account_option_bool_new("Don't echo back outbound SMS", "ignore_outbound_sms", FALSE);
+	prpl_info->protocol_options = g_list_append(prpl_info->protocol_options, option);
+
 }
 
 PurplePluginProtocolInfo prpl_info = {
