@@ -190,7 +190,7 @@ pb_fetch_url(PushBulletAccount *pba, const gchar *url, const gchar *postdata, Pu
     }
     
     if(postdata) {
-		purple_debug_info("mightytext", "With postdata %s\n", postdata);
+		purple_debug_info("pushbullet", "With postdata %s\n", postdata);
 		
 		if (postdata[0] == '{') {
 			g_string_append(headers, "Content-Type: application/json\r\n");
@@ -810,10 +810,11 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 		for(i = 0, len = json_array_get_length(devices); i < len; i++) {
 			JsonObject *device = json_array_get_object_element(devices, i);
 			
-			if (pba->main_sms_device == NULL && json_object_get_boolean_member(device, "has_sms")) {
+			if (device != NULL && json_object_has_member(device, "has_sms") && json_object_get_boolean_member(device, "has_sms")) {
 				pba->main_sms_device = g_strdup(json_object_get_string_member(device, "iden"));
 				purple_account_set_string(pba->account, "main_sms_device", pba->main_sms_device);
-				
+				purple_debug_info("pushbullet", "Set main_sms_device to iden %s\n", pba->main_sms_device);
+
 				pb_get_phonebook(pba, pba->main_sms_device);
 				
 				if (!pba->websocket) {
@@ -944,10 +945,10 @@ pb_got_everything(PushBulletAccount *pba, JsonNode *node, gpointer user_data)
 	if (chats != NULL) {
 		for(i = 0, len = json_array_get_length(chats); i < len; i++) {
 			JsonObject *chat = json_array_get_object_element(chats, i);
-			JsonObject *contact = json_object_get_object_member(chat, "with");
-			const gchar *email = json_object_get_string_member(contact, "email_normalized");
-			const gchar *name = json_object_get_string_member(contact, "name");
-			const gchar *image_url = json_object_get_string_member(contact, "image_url");
+			JsonObject *contact = json_object_has_member(chat, "with") ? json_object_get_object_member(chat, "with") : NULL;
+			const gchar *email = ((contact != NULL) && json_object_has_member(contact, "email_normalized")) ? json_object_get_string_member(contact, "email_normalized") : NULL;
+			const gchar *name = ((contact != NULL) && json_object_has_member(contact, "name")) ? json_object_get_string_member(contact, "name") : NULL;
+			const gchar *image_url = ((contact != NULL) && json_object_has_member(contact, "image_url")) ? json_object_get_string_member(contact, "image_url") : NULL;
 			
 			PurpleBuddy *buddy = purple_find_buddy(pba->account, email);
 			if (buddy == NULL)
